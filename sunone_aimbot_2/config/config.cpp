@@ -203,6 +203,7 @@ bool Config::loadConfig(const std::string& filename)
         overlay_sidebar_collapsed = false;
         local_mcp_enabled = true;
         overlay_exclude_from_capture = true;
+        overlay_vsync = false;
         overlay_x = 0;
         overlay_y = 0;
         overlay_width = 1180;
@@ -287,6 +288,8 @@ bool Config::loadConfig(const std::string& filename)
         game_profiles[uni.name] = uni;
         active_game = uni.name;
 
+        schema_version = kCurrentSchemaVersion;
+        validateAndClamp();
         saveConfig(target);
         return true;
     }
@@ -526,6 +529,7 @@ bool Config::loadConfig(const std::string& filename)
     overlay_sidebar_collapsed = get_bool("overlay_sidebar_collapsed", false);
     local_mcp_enabled = get_bool("local_mcp_enabled", true);
     overlay_exclude_from_capture = get_bool("overlay_exclude_from_capture", true);
+    overlay_vsync = get_bool("overlay_vsync", false);
     overlay_x = get_long("overlay_x", 0);
     overlay_y = get_long("overlay_y", 0);
     overlay_width = get_long("overlay_width", 1180);
@@ -558,6 +562,8 @@ bool Config::loadConfig(const std::string& filename)
 
     game_overlay_enabled = get_bool("game_overlay_enabled", false);
     game_overlay_max_fps = get_long("game_overlay_max_fps", 0);
+    if (game_overlay_max_fps < 0) game_overlay_max_fps = 0;
+    if (game_overlay_max_fps > 1000) game_overlay_max_fps = 1000;
     game_overlay_draw_boxes = get_bool("game_overlay_draw_boxes", true);
     game_overlay_compensate_latency = get_bool("game_overlay_compensate_latency", true);
     game_overlay_draw_future = get_bool("game_overlay_draw_future", true);
@@ -639,7 +645,107 @@ bool Config::loadConfig(const std::string& filename)
     screenshot_delay = get_long("screenshot_delay", 500);
     verbose = get_bool("verbose", false);
 
+    schema_version = get_long("schema_version", 1);
+    if (schema_version < 1) schema_version = 1;
+    if (schema_version != kCurrentSchemaVersion)
+        migrate(schema_version);
+    validateAndClamp();
+
     return true;
+}
+
+void Config::migrate(int fromVersion)
+{
+    // v1 -> v2: overlay_vsync and schema_version did not exist; the get_*
+    // fallbacks above already filled overlay_vsync=false. Keep the previous
+    // active profile and clamp everything through validateAndClamp().
+    if (fromVersion < 2)
+    {
+        if (game_profiles.empty())
+        {
+            GameProfile uni;
+            uni.name = "UNIFIED";
+            uni.sens = 1.0;
+            uni.yaw = 0.022;
+            uni.pitch = uni.yaw;
+            game_profiles[uni.name] = uni;
+        }
+        if (!game_profiles.count(active_game) && !game_profiles.empty())
+            active_game = game_profiles.begin()->first;
+    }
+    schema_version = kCurrentSchemaVersion;
+}
+
+void Config::validateAndClamp()
+{
+    auto clampInt = [](int& v, int lo, int hi) { v = std::clamp(v, lo, hi); };
+    auto clampFloat = [](float& v, float lo, float hi) { v = std::clamp(v, lo, hi); };
+
+    clampInt(udp_port, 1, 65535);
+    if (detection_resolution != 160 && detection_resolution != 320 && detection_resolution != 640)
+        detection_resolution = 320;
+    clampInt(capture_fps, 0, 1000);
+    if (monitor_idx < 0) monitor_idx = 0;
+    clampInt(circle_fov_radius_percent, 1, 100);
+    clampFloat(body_y_offset, -1.0f, 1.0f);
+    clampFloat(head_y_offset, -1.0f, 1.0f);
+
+    if (fovX < 1) fovX = 1;
+    if (fovX > 360) fovX = 360;
+    if (fovY < 1) fovY = 1;
+    if (fovY > 360) fovY = 360;
+    clampFloat(minSpeedMultiplier, 0.0f, 100.0f);
+    clampFloat(maxSpeedMultiplier, 0.0f, 100.0f);
+    if (prediction_futurePositions < 0) prediction_futurePositions = 0;
+    if (prediction_futurePositions > 240) prediction_futurePositions = 240;
+
+    clampFloat(kalman_process_noise_position, 0.0001f, 5000.0f);
+    clampFloat(kalman_process_noise_velocity, 0.0001f, 50000.0f);
+    clampFloat(kalman_measurement_noise, 0.0001f, 5000.0f);
+    clampFloat(kalman_velocity_damping, 0.0f, 3.0f);
+    clampFloat(kalman_max_velocity, 100.0f, 60000.0f);
+    clampInt(kalman_warmup_frames, 0, 20);
+    clampFloat(kalman_additional_prediction_ms, -80.0f, 120.0f);
+    clampFloat(kalman_reset_timeout_sec, 0.05f, 3.0f);
+
+    clampFloat(confidence_threshold, 0.01f, 1.0f);
+    clampFloat(nms_threshold, 0.01f, 1.0f);
+    clampInt(max_detections, 1, 1000);
+    clampInt(cpuCoreReserveCount, 0, 256);
+    clampInt(systemMemoryReserveMB, 0, 1048576);
+#ifdef USE_CUDA
+    clampInt(gpuMemoryReserveMB, 0, 65536);
+#endif
+
+    clampInt(overlay_opacity, 0, 255);
+    clampFloat(overlay_ui_scale, 0.85f, 1.35f);
+    clampInt(overlay_width, 560, 3840);
+    clampInt(overlay_height, 340, 2160);
+
+    clampInt(depth_fps, 0, 1000);
+    clampInt(depth_colormap, 0, 21);
+    clampInt(depth_mask_fps, 0, 1000);
+    clampInt(depth_mask_near_percent, 1, 100);
+    clampInt(depth_mask_expand, 0, 128);
+    clampInt(depth_mask_hold_frames, 0, 120);
+    clampInt(depth_mask_alpha, 0, 255);
+
+    clampInt(game_overlay_max_fps, 0, 1000);
+    clampGameOverlayColor();
+    clampFloat(game_overlay_box_thickness, 0.1f, 20.0f);
+    clampFloat(game_overlay_frame_thickness, 0.1f, 20.0f);
+    clampFloat(game_overlay_future_point_radius, 0.5f, 64.0f);
+    clampFloat(game_overlay_future_alpha_falloff, 0.0f, 8.0f);
+    clampInt(game_overlay_icon_width, 1, 1024);
+    clampInt(game_overlay_icon_height, 1, 1024);
+
+    clampInt(collect_save_every_n_frames, 1, 600);
+    clampInt(collect_jpeg_quality, 50, 100);
+    clampFloat(auto_label_min_conf, 0.01f, 0.99f);
+    clampInt(auto_label_max_boxes, 1, 200);
+    if (screenshot_delay < 0) screenshot_delay = 0;
+
+    schema_version = kCurrentSchemaVersion;
 }
 
 bool Config::saveConfig(const std::string& filename)
@@ -650,15 +756,30 @@ bool Config::saveConfig(const std::string& filename)
         target = config_path;
     }
 
-    std::ofstream file(target);
+    validateAndClamp();
+
+    // Timestamped backup of the previous file (single .bak slot).
+    {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(target, ec))
+            std::filesystem::copy_file(target, target + ".bak",
+                std::filesystem::copy_options::overwrite_existing, ec);
+    }
+
+    // Atomic write: temp file + replace so a crash never leaves half a config.
+    const std::string tmp = target + ".tmp";
+    std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
     if (!file.is_open())
     {
-        std::cerr << "Error opening config for writing: " << target << std::endl;
+        std::cerr << "Error opening config for writing: " << tmp << std::endl;
         return false;
     }
 
     file << "# An explanation of the options can be found at:\n";
     file << "# https://github.com/SunOner/sunone_aimbot_2/blob/main/docs/config.md\n\n";
+
+    file << "# Schema\n"
+        << "schema_version = " << schema_version << "\n\n";
 
     // Capture
     file << "# Capture\n"
@@ -829,6 +950,7 @@ bool Config::saveConfig(const std::string& filename)
         << "overlay_sidebar_collapsed = " << (overlay_sidebar_collapsed ? "true" : "false") << "\n"
         << "local_mcp_enabled = " << (local_mcp_enabled ? "true" : "false") << "\n"
         << "overlay_exclude_from_capture = " << (overlay_exclude_from_capture ? "true" : "false") << "\n"
+        << "overlay_vsync = " << (overlay_vsync ? "true" : "false") << "\n"
         << std::setprecision(0)
         << "overlay_x = " << overlay_x << "\n"
         << "overlay_y = " << overlay_y << "\n"
@@ -926,6 +1048,34 @@ bool Config::saveConfig(const std::string& filename)
     }
 
     file.close();
+    if (!file)
+    {
+        std::cerr << "Error writing config temp file: " << tmp << std::endl;
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        return false;
+    }
+
+#ifdef _WIN32
+    if (!MoveFileExA(tmp.c_str(), target.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        std::cerr << "Error replacing config file: " << target
+                  << " (err=" << GetLastError() << ")" << std::endl;
+        return false;
+    }
+#else
+    {
+        std::error_code ec;
+        std::filesystem::rename(tmp, target, ec);
+        if (ec)
+        {
+            std::cerr << "Error replacing config file: " << target
+                      << " (" << ec.message() << ")" << std::endl;
+            return false;
+        }
+    }
+#endif
     return true;
 }
 
