@@ -5,6 +5,7 @@
 #include <opencv2/core/cuda.hpp>
 #endif
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -36,6 +37,17 @@ cv::Mat sourceImage(const NodeGraph::FrameStream& frame);
 std::string resolveModelPath(const NodeGraph::Node& node);
 void reportError(int nodeKey,const std::string& error);
 std::string nodeError(int nodeKey);
+
+// P0 capture-latency: lock the latency-optimal inference flags (CUDA graph +
+// static FP16 batch=1). Returns a sanitized copy with the flags forced and,
+// when warning is non-null, a description of what was corrected.
+NodeGraph::Node sanitizeInferenceNode(const NodeGraph::Node& node, std::string* warning = nullptr);
+// Validates the locked configuration: fixed_input_size=1, use_cuda_graph=1,
+// use_pinned_memory=1, export_enable_fp16=1, export_enable_fp8=0.
+// Returns true when valid; otherwise fills *error.
+bool validateStaticFp16Batch1(const NodeGraph::Node& node, std::string* error = nullptr);
+// Mirrors the DDA no-present skip (AccumulatedFrames==0 without a present).
+bool shouldSkipStaleCapture(std::uint32_t accumulatedFrames, bool hasLastPresentTime);
 
 // Called without configMutex. Applies node settings to the physical capture
 // service and returns false when the graph has no active capture source.
