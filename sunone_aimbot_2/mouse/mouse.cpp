@@ -42,7 +42,167 @@ bool hasGraphStateCapacity(const States& states, int nodeKey)
             ++count;
     return count < NodeGraph::MaxNodes;
 }
+} // namespace
+
+// Humanizer helpers (conservative: every feature defaults to OFF and is only
+// enabled by an explicit "humanizer_*" node parameter > 0).
+namespace humanizer
+{
+struct WindOpts
+{
+    bool overshootEnabled = false;
+    double overshootMinPx = 3.0, overshootMaxPx = 8.0;
+    double overshootDistPx = 16.0, overshootReturnT = 0.85;
+    bool fittsEnabled = false;
+    double fittsA = 0.05, fittsB = 0.12, fittsW = 24.0;
+    bool jerkEnabled = false;
+    int noiseMode = 0; // 0 legacy uniform, 1 OU, 2 Perlin1D
+    double ouTheta = 2.5, ouSigma = 1.0, noiseSignalGain = 0.0;
+    double deadzonePx = 0.0;
+};
+
+inline double nodeParam(const NodeGraph::Node& node, const char* key, double fallback)
+{
+    const double v = NodeGraph::parameter(node, key);
+    // parameter() returns 0 for unknown keys: treat exact 0 as "unset" so
+    // legacy graphs keep legacy behavior; explicit 0 stays disabled anyway.
+    if (v == 0.0) return fallback;
+    return v;
 }
+
+inline bool nodeFlag(const NodeGraph::Node& node, const char* key)
+{
+    return NodeGraph::parameter(node, key) != 0.0;
+}
+
+inline WindOpts windOptsFromNode(const NodeGraph::Node& node)
+{
+    WindOpts o;
+    o.overshootEnabled = nodeFlag(node, "humanizer_overshoot");
+    o.overshootMinPx = std::clamp(nodeParam(node, "humanizer_overshoot_min_px", 3.0), 0.0, 32.0);
+    o.overshootMaxPx = std::clamp(nodeParam(node, "humanizer_overshoot_max_px", 8.0), 0.0, 32.0);
+    if (o.overshootMaxPx < o.overshootMinPx) std::swap(o.overshootMinPx, o.overshootMaxPx);
+    o.overshootDistPx = std::clamp(nodeParam(node, "humanizer_overshoot_dist_px", 16.0), 0.0, 512.0);
+    o.overshootReturnT = std::clamp(nodeParam(node, "humanizer_overshoot_return_t", 0.85), 0.0, 1.0);
+    o.fittsEnabled = nodeFlag(node, "humanizer_fitts");
+    o.fittsA = std::clamp(nodeParam(node, "humanizer_fitts_a", 0.01), 0.0, 2.0);
+    o.fittsB = std::clamp(nodeParam(node, "humanizer_fitts_b", 0.03), 0.0, 2.0);
+    o.fittsW = std::clamp(nodeParam(node, "humanizer_fitts_W", 24.0), 1.0, 1024.0);
+    o.jerkEnabled = nodeFlag(node, "humanizer_jerk");
+    o.noiseMode = static_cast<int>(std::clamp(NodeGraph::parameter(node, "humanizer_noise_mode"), 0.0, 2.0));
+    o.ouTheta = std::clamp(nodeParam(node, "humanizer_noise_theta", 2.5), 0.01, 20.0);
+    o.ouSigma = std::clamp(nodeParam(node, "humanizer_noise_sigma", 1.0), 0.0, 8.0);
+    o.noiseSignalGain = std::clamp(NodeGraph::parameter(node, "humanizer_noise_signal_gain"), 0.0, 4.0);
+    o.deadzonePx = std::clamp(NodeGraph::parameter(node, "humanizer_deadzone_px"), 0.0, 256.0);
+    return o;
+}
+
+// Fitts law: MT = a + b * log2(D/W + 1). Returns movement time in seconds.
+inline double fittsMT(double distPx, double wPx, double a, double b)
+{
+    if (!(distPx > 0.0) || !(wPx > 0.0)) return 0.0;
+    return std::max(0.0, a + b * std::log2(distPx / wPx + 1.0));
+}
+
+// Minimum-jerk smootherstep velocity weight at normalized time t in [0,1]:
+// s(t) = 10t^3 - 15t^4 + 6t^5 ; w(t) = ds/dt normalized.
+inline double jerkVelocity(double t)
+{
+    t = std::clamp(t, 0.0, 1.0);
+    const double t2 = t * t;
+    // ds/dt = 30t^2 - 60t^3 + 30t^4, mean over [0,1] is 1 -> normalized already.
+    return 30.0 * t2 - 60.0 * t2 * t + 30.0 * t2 * t2;
+}
+
+// Ornstein-Uhlenbeck step: x += theta*(0-x)*dt + sigma*sqrt(dt)*N(0,1).
+inline double ouStep(double x, double theta, double sigma, double dt,
+    std::mt19937& rng, std::normal_distribution<double>& gauss)
+{
+    x += -theta * x * dt + sigma * std::sqrt(std::max(1e-6, dt)) * gauss(rng);
+    return std::clamp(x, -4.0, 4.0);
+}
+
+// Deterministic Perlin-like 1D gradient noise in [-1,1], seeded per node.
+inline double perlin1D(double t, std::uint32_t seed)
+{
+    const long long xi = static_cast<long long>(std::floor(t));
+    const double xf = t - static_cast<double>(xi);
+    auto hash = [&](long long n) -> double {
+        std::uint64_t h = static_cast<std::uint64_t>(n * 374761393LL + seed * 668265263LL);
+        h = (h ^ (h >> 13)) * 1274126177ULL;
+        h ^= h >> 16;
+        return static_cast<double>(h % 1000000ULL) / 500000.0 - 1.0;
+    };
+    const double g0 = hash(xi), g1 = hash(xi + 1);
+    const double u = xf * xf * xf * (xf * (xf * 6.0 - 15.0) + 10.0);
+    return g0 + (g1 - g0) * u;
+}
+
+// One-Euro filter state per prediction node.
+struct OneEuroState
+{
+    bool init = false;
+    double x = 0.0, y = 0.0;
+    double dx = 0.0, dy = 0.0;
+    std::chrono::steady_clock::time_point t{};
+};
+
+inline double oneEuroAlpha(double fc, double dt)
+{
+    const double tau = 1.0 / (2.0 * 6.28318530717958647692 * std::max(1e-3, fc));
+    return 1.0 / (1.0 + tau / std::max(1e-4, dt));
+}
+
+inline std::pair<double, double> oneEuroFilter(OneEuroState& s, double mx, double my,
+    double dt, double fcMin, double beta, double dCutoff)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (!s.init)
+    {
+        s.init = true; s.x = mx; s.y = my; s.dx = s.dy = 0.0; s.t = now;
+        return { mx, my };
+    }
+    const double rawDx = (mx - s.x) / std::max(1e-4, dt);
+    const double rawDy = (my - s.y) / std::max(1e-4, dt);
+    const double aD = oneEuroAlpha(dCutoff, dt);
+    s.dx += (rawDx - s.dx) * aD;
+    s.dy += (rawDy - s.dy) * aD;
+    const double speed = std::hypot(s.dx, s.dy);
+    const double fc = fcMin + beta * speed;
+    const double a = oneEuroAlpha(fc, dt);
+    s.x += (mx - s.x) * a;
+    s.y += (my - s.y) * a;
+    s.t = now;
+    return { s.x, s.y };
+}
+
+// Coasting state per prediction node: decay velocity instead of hard reset.
+struct CoastState
+{
+    int coastLeft = 0;
+    double px = 0.0, py = 0.0, vx = 0.0, vy = 0.0;
+};
+
+} // namespace humanizer
+
+namespace
+{
+// File-static humanizer state keeps mouse.h untouched (strict scope).
+std::unordered_map<int, humanizer::OneEuroState> g_oneEuroStates;
+std::unordered_map<int, humanizer::CoastState> g_coastStates;
+std::unordered_map<int, std::pair<double, double>> g_ouStates;
+std::unordered_map<int, std::pair<double, double>> g_overshootDebt;
+std::unordered_map<int, double> g_overshootInitial;
+std::unordered_map<int, double> g_perlinClock;
+thread_local humanizer::WindOpts t_windOpts;
+thread_local int t_windNodeKey = 0;
+thread_local bool t_hasWindOpts = false;
+struct WindOptsGuard
+{
+    WindOptsGuard(const humanizer::WindOpts& o, int key) { t_windOpts = o; t_windNodeKey = key; t_hasWindOpts = true; }
+    ~WindOptsGuard() { t_hasWindOpts = false; t_windNodeKey = 0; }
+};
+} // namespace
 
 MouseThread::MouseThread(int resolution,IMouseInput* mouseInputDevice)
     :screen_width(std::max(1,resolution)),screen_height(std::max(1,resolution)),
@@ -155,12 +315,56 @@ NodeGraph::Movement MouseThread::buildWindSteps(int dx, int dy)
         return movement;
     }
 
+    // Humanizer options for this synthesis (legacy defaults when no guard).
+    const humanizer::WindOpts opts = t_hasWindOpts ? t_windOpts : humanizer::WindOpts{};
+    const int nodeKey = t_windNodeKey;
+
+    // Overshoot: inject 3-8px along the aim direction when dist > 16px, then
+    // schedule the opposite correction once progress t > returnT. The return
+    // is applied when the residual drops below (1-returnT)*initial.
+    if (opts.overshootEnabled && nodeKey != 0)
+    {
+        const double preMag = std::hypot(windCarryX, windCarryY);
+        auto debtIt = g_overshootDebt.find(nodeKey);
+        auto initIt = g_overshootInitial.find(nodeKey);
+        if (debtIt != g_overshootDebt.end() && initIt != g_overshootInitial.end())
+        {
+            const double threshold = initIt->second * (1.0 - opts.overshootReturnT);
+            if (preMag <= threshold || preMag < 1.0)
+            {
+                windCarryX += debtIt->second.first;
+                windCarryY += debtIt->second.second;
+                g_overshootDebt.erase(debtIt);
+                g_overshootInitial.erase(initIt);
+            }
+        }
+        else if (preMag > opts.overshootDistPx && preMag > 1e-8)
+        {
+            std::uniform_real_distribution<double> ampDist(opts.overshootMinPx, opts.overshootMaxPx);
+            const double amp = std::clamp(ampDist(windRng), opts.overshootMinPx, opts.overshootMaxPx);
+            const double ox = windCarryX / preMag * amp;
+            const double oy = windCarryY / preMag * amp;
+            windCarryX += ox;
+            windCarryY += oy;
+            g_overshootDebt[nodeKey] = { -ox, -oy };
+            g_overshootInitial[nodeKey] = preMag + amp;
+        }
+    }
+
     std::uniform_real_distribution<double> noiseDist(-1.0, 1.0);
+    std::normal_distribution<double> gaussDist(0.0, 1.0);
     std::uniform_real_distribution<double> clipDist(0.55, 1.0);
     constexpr double twoPi = 6.28318530717958647692;
 
-    const double carryMag = std::hypot(windCarryX, windCarryY);
-    const int maxSubsteps = std::clamp(static_cast<int>(carryMag * 0.24) + 1, 1, 5);
+    int maxSubsteps = std::clamp(static_cast<int>(std::hypot(windCarryX, windCarryY) * 0.24) + 1, 1, 5);
+    if (opts.fittsEnabled)
+    {
+        // Fitts law drives the Wind duration: MT=a+b*log2(D/W+1).
+        const double distPx = std::hypot(windCarryX, windCarryY);
+        const double mt = humanizer::fittsMT(distPx, opts.fittsW, opts.fittsA, opts.fittsB);
+        if (mt > 0.0)
+            maxSubsteps = std::clamp(static_cast<int>(std::ceil(mt / currentFrameIntervalSec())), 1, 5);
+    }
 
     for (int i = 0; i < maxSubsteps; ++i)
     {
@@ -203,8 +407,30 @@ NodeGraph::Movement MouseThread::buildWindSteps(int dx, int dy)
         windPatternX = windPatternX * (1.0 - patternBlend) + patternTargetX * patternBlend;
         windPatternY = windPatternY * (1.0 - patternBlend) + patternTargetY * patternBlend;
 
-        windNoiseX = windNoiseX * 0.72 + noiseDist(windRng) * noiseAmp * 0.28;
-        windNoiseY = windNoiseY * 0.72 + noiseDist(windRng) * noiseAmp * 0.28;
+        // Correlated + signal-dependent noise. Mode 0 keeps the legacy
+        // uniform path byte-identical; modes 1/2 add OU/Perlin1D correlation
+        // (seeded per nodeKey) scaled by speed when noiseSignalGain > 0.
+        double sampleX = noiseDist(windRng);
+        double sampleY = noiseDist(windRng);
+        if (opts.noiseMode == 1 && nodeKey != 0)
+        {
+            auto& ou = g_ouStates[nodeKey]; // value-initialized to (0,0)
+            const double dt = currentFrameIntervalSec();
+            ou.first = humanizer::ouStep(ou.first, opts.ouTheta, opts.ouSigma, dt, windRng, gaussDist);
+            ou.second = humanizer::ouStep(ou.second, opts.ouTheta, opts.ouSigma, dt, windRng, gaussDist);
+            sampleX = ou.first;
+            sampleY = ou.second;
+        }
+        else if (opts.noiseMode == 2 && nodeKey != 0)
+        {
+            double& clock = g_perlinClock[nodeKey];
+            clock += (0.35 + 0.65 * normDist);
+            sampleX = humanizer::perlin1D(clock, static_cast<std::uint32_t>(nodeKey * 2654435761u + 97u));
+            sampleY = humanizer::perlin1D(clock * 1.31 + 17.7, static_cast<std::uint32_t>(nodeKey * 40503u + 13u));
+        }
+        const double signalScale = 1.0 + opts.noiseSignalGain * std::clamp(velMag / std::max(1.0, baseM), 0.0, 2.0);
+        windNoiseX = windNoiseX * 0.72 + sampleX * noiseAmp * signalScale * 0.28;
+        windNoiseY = windNoiseY * 0.72 + sampleY * noiseAmp * signalScale * 0.28;
 
         const double windForceX = windNoiseX + windPatternX * 0.42;
         const double windForceY = windNoiseY + windPatternY * 0.42;
@@ -244,6 +470,40 @@ NodeGraph::Movement MouseThread::buildWindSteps(int dx, int dy)
         const double s = carryCap / finalCarryMag;
         windCarryX *= s;
         windCarryY *= s;
+    }
+    if (opts.jerkEnabled && movement.steps.size() >= 2)
+    {
+        // Minimum-jerk smootherstep redistribution: timing follows the
+        // bell-shaped jerk velocity profile while the summed displacement
+        // stays identical (rounding drift fixed on the last step).
+        const std::size_t n = movement.steps.size();
+        long long totalX = 0, totalY = 0;
+        for (const auto& s : movement.steps) { totalX += s.dx; totalY += s.dy; }
+        std::vector<double> w(n);
+        double wSum = 0.0;
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            w[k] = std::max(1e-6, humanizer::jerkVelocity((static_cast<double>(k) + 0.5) / static_cast<double>(n)));
+            wSum += w[k];
+        }
+        long long accX = 0, accY = 0;
+        for (std::size_t k = 0; k < n; ++k)
+        {
+            if (k + 1 == n)
+            {
+                movement.steps[k].dx = static_cast<int>(totalX - accX);
+                movement.steps[k].dy = static_cast<int>(totalY - accY);
+            }
+            else
+            {
+                const int nx = static_cast<int>(std::lround(static_cast<double>(totalX) * w[k] / wSum));
+                const int ny = static_cast<int>(std::lround(static_cast<double>(totalY) * w[k] / wSum));
+                movement.steps[k].dx = nx;
+                movement.steps[k].dy = ny;
+                accX += nx;
+                accY += ny;
+            }
+        }
     }
     return movement;
 }
@@ -399,6 +659,16 @@ std::pair<double, double> MouseThread::graphPredict(int nodeKey, double pointX, 
     const double delay=std::clamp(std::chrono::duration<double>(std::chrono::steady_clock::now()-observationTime).count(),0.0,0.35);
     if(NodeGraph::parameter(node,"kalman_compensate_detection_delay")!=0)lookahead+=delay;
     lookahead=std::clamp(lookahead+NodeGraph::parameter(node,"kalman_additional_prediction_ms")*0.001,0.0,1.5);
+    if (NodeGraph::parameter(node, "humanizer_lead_adaptive") != 0.0)
+    {
+        // Adaptive lead: scale lookahead with target speed so fast strafes get
+        // more lead and slow/steady targets keep the base timing.
+        const double speed = std::hypot(motion.velocity.x, motion.velocity.y);
+        const double gain = humanizer::nodeParam(node, "humanizer_lead_gain", 0.0004);
+        const double maxScale = std::clamp(humanizer::nodeParam(node, "humanizer_lead_max_scale", 1.6), 1.0, 3.0);
+        lookahead = std::clamp(lookahead * (1.0 + speed * std::max(0.0, gain)), 0.0, 1.5 * maxScale);
+        lookahead = std::clamp(lookahead, 0.0, 1.5);
+    }
     const auto state=graphPredictionStates.find(nodeKey);if(state!=graphPredictionStates.end())state->second.lookaheadSec=lookahead;
     const auto result=NodeGraph::projectPoint(motion.position,motion.velocity,lookahead,motion.damping,motion.ready);
     return {result.x,result.y};
@@ -429,11 +699,71 @@ NodeGraph::MotionData MouseThread::graphEstimateMotion(int nodeKey,NodeGraph::Po
     settings.max_velocity = NodeGraph::parameter(node,"kalman_max_velocity");
     settings.warmup_frames = static_cast<int>(NodeGraph::parameter(node,"kalman_warmup_frames"));
     state.kalman.setSettings(settings);
-    if (reset || gap<0 || gap>timeout) state.kalman.reset();
+    // Humanizer coasting: instead of a hard reset on timeout, coast for N
+    // frames with exponential velocity decay. Disabled by default.
+    const bool coastEnabled = NodeGraph::parameter(node, "humanizer_coast") != 0.0;
+    const int coastFrames = std::clamp(static_cast<int>(NodeGraph::parameter(node, "humanizer_coast_frames") == 0.0
+        ? 6.0 : NodeGraph::parameter(node, "humanizer_coast_frames")), 0, 60);
+    const double coastDecay = std::clamp(humanizer::nodeParam(node, "humanizer_coast_decay", 0.90), 0.5, 0.999);
+    if (reset || gap<0 || (gap>timeout && !coastEnabled)) state.kalman.reset();
+    if (gap > timeout && coastEnabled && !reset && gap >= 0)
+    {
+        auto& coast = g_coastStates[nodeKey];
+        if (coast.coastLeft <= 0 && state.kalman.initialized())
+        {
+            const auto pos = state.kalman.position();
+            const auto vel = state.kalman.velocity();
+            coast = { coastFrames, pos.first, pos.second, vel.first, vel.second };
+        }
+        if (coast.coastLeft > 0)
+        {
+            const double dt = gap>0 ? std::clamp(gap,1.0/500.0,0.25) : currentFrameIntervalSec();
+            coast.px += coast.vx * dt;
+            coast.py += coast.vy * dt;
+            coast.vx *= coastDecay;
+            coast.vy *= coastDecay;
+            --coast.coastLeft;
+            state.time = observationTime;
+            state.lookaheadSec = 0;
+            // Feed the coasted position through the 1E filter below so the
+            // output stays continuous when observations resume.
+            double fx = coast.px, fy = coast.py;
+            if (NodeGraph::parameter(node, "humanizer_oneeuro") != 0.0)
+            {
+                auto& f = g_oneEuroStates[nodeKey];
+                const double fcMin = humanizer::nodeParam(node, "humanizer_oneeuro_fcmin", 1.0);
+                const double beta = std::clamp(NodeGraph::parameter(node, "humanizer_oneeuro_beta"), 0.0, 5.0);
+                const double dcut = humanizer::nodeParam(node, "humanizer_oneeuro_dcutoff", 1.0);
+                const auto filtered = humanizer::oneEuroFilter(f, fx, fy, dt,
+                    std::clamp(fcMin, 0.05, 20.0), beta, std::clamp(dcut, 0.05, 20.0));
+                fx = filtered.first; fy = filtered.second;
+            }
+            return { { fx, fy }, { coast.vx, coast.vy },
+                state.kalman.settings().velocity_damping, true, true };
+        }
+        state.kalman.reset();
+    }
+    else if (coastEnabled)
+    {
+        g_coastStates.erase(nodeKey);
+    }
     const double dt = gap>0 ? std::clamp(gap,1.0/500.0,0.25) : currentFrameIntervalSec();
     const auto telemetry=state.kalman.update(point.x,point.y,dt,0);
     state.time=observationTime;state.lookaheadSec=0;
-    return {{telemetry.estimate_x,telemetry.estimate_y},{telemetry.velocity_x,telemetry.velocity_y},
+    double ex = telemetry.estimate_x, ey = telemetry.estimate_y;
+    if (NodeGraph::parameter(node, "humanizer_oneeuro") != 0.0)
+    {
+        // 1-Euro (or signal-dependent EMA when beta>0) after AimKalman2D:
+        // fc = fcmin + beta * |v|.
+        auto& f = g_oneEuroStates[nodeKey];
+        const double fcMin = humanizer::nodeParam(node, "humanizer_oneeuro_fcmin", 1.0);
+        const double beta = std::clamp(NodeGraph::parameter(node, "humanizer_oneeuro_beta"), 0.0, 5.0);
+        const double dcut = humanizer::nodeParam(node, "humanizer_oneeuro_dcutoff", 1.0);
+        const auto filtered = humanizer::oneEuroFilter(f, ex, ey, dt,
+            std::clamp(fcMin, 0.05, 20.0), beta, std::clamp(dcut, 0.05, 20.0));
+        ex = filtered.first; ey = filtered.second;
+    }
+    return {{ex,ey},{telemetry.velocity_x,telemetry.velocity_y},
         state.kalman.settings().velocity_damping,telemetry.prediction_ready,telemetry.warmup_remaining==0};
 }
 
@@ -454,6 +784,18 @@ void MouseThread::retainGraphStates(const std::vector<int>& predictionKeys,const
         if(std::find(predictionKeys.begin(),predictionKeys.end(),it->first)==predictionKeys.end())it=graphPredictionStates.erase(it);else++it;
     for(auto it=graphWindStates.begin();it!=graphWindStates.end();)
         if(std::find(windKeys.begin(),windKeys.end(),it->first)==windKeys.end())it=graphWindStates.erase(it);else++it;
+    for (auto it = g_oneEuroStates.begin(); it != g_oneEuroStates.end();)
+        if (std::find(predictionKeys.begin(), predictionKeys.end(), it->first) == predictionKeys.end()) it = g_oneEuroStates.erase(it); else ++it;
+    for (auto it = g_coastStates.begin(); it != g_coastStates.end();)
+        if (std::find(predictionKeys.begin(), predictionKeys.end(), it->first) == predictionKeys.end()) it = g_coastStates.erase(it); else ++it;
+    for (auto it = g_ouStates.begin(); it != g_ouStates.end();)
+        if (std::find(windKeys.begin(), windKeys.end(), it->first) == windKeys.end()) it = g_ouStates.erase(it); else ++it;
+    for (auto it = g_perlinClock.begin(); it != g_perlinClock.end();)
+        if (std::find(windKeys.begin(), windKeys.end(), it->first) == windKeys.end()) it = g_perlinClock.erase(it); else ++it;
+    for (auto it = g_overshootDebt.begin(); it != g_overshootDebt.end();)
+        if (std::find(windKeys.begin(), windKeys.end(), it->first) == windKeys.end()) it = g_overshootDebt.erase(it); else ++it;
+    for (auto it = g_overshootInitial.begin(); it != g_overshootInitial.end();)
+        if (std::find(windKeys.begin(), windKeys.end(), it->first) == windKeys.end()) it = g_overshootInitial.erase(it); else ++it;
 }
 
 void MouseThread::sendMovementToDriver(int dx, int dy, std::uint64_t generation,
@@ -506,6 +848,13 @@ NodeGraph::Movement MouseThread::graphMouseDelta(double pointX,double pointY,dou
     NodeGraph::Point center,const NodeGraph::Node& node)
 {
     NodeGraph::Movement movement;
+    // Deadzone pivot: ignore micro-offsets around the pivot so the aim does
+    // not micro-jitter on already-centered targets. Disabled when 0.
+    const double deadzonePx = std::clamp(NodeGraph::parameter(node,"humanizer_deadzone_px"),0.0,256.0);
+    if (deadzonePx > 0.0 && std::isfinite(pointX) && std::isfinite(pointY) &&
+        std::isfinite(center.x) && std::isfinite(center.y) &&
+        std::hypot(pointX - center.x, pointY - center.y) < deadzonePx)
+        return movement;
     const double fovX=NodeGraph::parameter(node,"fov_x"),fovY=NodeGraph::parameter(node,"fov_y");
     const double sens=NodeGraph::parameter(node,"sens"),yaw=NodeGraph::parameter(node,"yaw"),pitch=NodeGraph::parameter(node,"pitch");
     const double baseFov=NodeGraph::parameter(node,"base_fov");
@@ -575,6 +924,8 @@ NodeGraph::Movement MouseThread::graphWindMotion(int nodeKey,const NodeGraph::Mo
     wind_mouse_enabled=NodeGraph::parameter(node,"enabled")!=0;
     wind_G=NodeGraph::parameter(node,"wind_G");wind_W=NodeGraph::parameter(node,"wind_W");
     wind_M=NodeGraph::parameter(node,"wind_M");wind_D=NodeGraph::parameter(node,"wind_D");
+    const humanizer::WindOpts opts = humanizer::windOptsFromNode(node);
+    const WindOptsGuard guard(opts, nodeKey);
     auto resolved=graphWindMotion(nodeKey,movement);
     resolved.pixelScaleX=movement.pixelScaleX;resolved.pixelScaleY=movement.pixelScaleY;
     return resolved;
