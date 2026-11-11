@@ -16,3 +16,9 @@
 | [Build workflow](guides/build-workflow.md) | Setup and local rebuilds |
 
 References: [Configuration](config.md) · [Build from source](build.md).
+
+## Overlay Productivity Notes
+
+- Long lists (Inference `model_path`, depth models, COM ports, capture windows, node key codes, ONNX export source) have a search box at the top of the dropdown.
+- The Overlay tab exposes Editor VSync and the in-game overlay FPS cap (`game_overlay_max_fps`, `0` = uncapped). The editor loop sleeps 10 ms normally and 16 ms while hidden or minimized.
+- The Debug tab colors tracker confidences red (low) to green (high), shows the last per-frame inference time, and previews the circle-FOV ring.
