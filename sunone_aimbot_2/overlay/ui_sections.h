@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <string>
+#include <vector>
 
 #include "imgui/imgui.h"
 
@@ -144,6 +146,40 @@ inline bool ComboRow(const char* label, int* currentItem, const char* const item
 {
     const SettingRow row = BeginSettingRow(label);
     const bool changed = ImGui::Combo(id, currentItem, items, itemsCount);
+    EndSettingRow(row);
+    return changed;
+}
+
+// Combo with an ImGuiTextFilter search box for long lists (models, COM
+// ports, capture windows). The filter resets every time the popup opens.
+inline bool FilteredComboRow(const char* label, int* currentItem, const std::vector<std::string>& names, const char* id = "##value") noexcept
+{
+    const SettingRow row = BeginSettingRow(label);
+    bool changed = false;
+    const char* preview = (*currentItem >= 0 && *currentItem < static_cast<int>(names.size()))
+        ? names[static_cast<size_t>(*currentItem)].c_str() : "";
+    if (ImGui::BeginCombo(id, preview))
+    {
+        static ImGuiTextFilter filter;
+        if (ImGui::IsWindowAppearing())
+            filter.Clear();
+        filter.Draw("##filter");
+        for (int i = 0; i < static_cast<int>(names.size()); ++i)
+        {
+            if (!filter.PassFilter(names[i].c_str()))
+                continue;
+            if (ImGui::Selectable(names[i].c_str(), i == *currentItem))
+            {
+                *currentItem = i;
+                changed = true;
+            }
+            if (i == *currentItem)
+                ImGui::SetItemDefaultFocus();
+        }
+        if (names.empty())
+            ImGui::TextDisabled("No items.");
+        ImGui::EndCombo();
+    }
     EndSettingRow(row);
     return changed;
 }

@@ -3055,10 +3055,14 @@ bool keyParameterControl(const Node& node,const ParameterSpec& spec,double& valu
     if(ImGui::BeginCombo("##value",current,ImGuiComboFlags_NoArrowButton))
     {
         ownInputPopup(node.id,pin);
+        static ImGuiTextFilter keyFilter;
+        if(ImGui::IsWindowAppearing())keyFilter.Clear();
+        keyFilter.Draw("##key_filter");
         for(const auto& name:key_names)
         {
             const int key=KeyCodes::getKeyCode(name);
             if(key<spec.minValue||key>spec.maxValue)continue;
+            if(!keyFilter.PassFilter(name.c_str()))continue;
             if(ImGui::Selectable(name.c_str(),key==code)){value=key;changed=true;}
             if(key==code)ImGui::SetItemDefaultFocus();
         }
@@ -3078,13 +3082,16 @@ bool sourceChoiceControl(const Node& node,const char* key,std::string& value,int
     const bool camera=!std::strcmp(key,"virtual_camera_name");
     if(!ImGui::BeginCombo("##value",value.empty()?(camera?"Select camera...":"Select window..."):value.c_str()))return false;
     ownInputPopup(node.id,pin);
-    if(ImGui::IsWindowAppearing()){choices=SourceChoices::enumerate(camera);std::snprintf(custom,sizeof(custom),"%s",value.c_str());}
+    static ImGuiTextFilter sourceFilter;
+    if(ImGui::IsWindowAppearing()){choices=SourceChoices::enumerate(camera);std::snprintf(custom,sizeof(custom),"%s",value.c_str());sourceFilter.Clear();}
     if(ImGui::Button("Refresh"))choices=SourceChoices::enumerate(camera);
+    sourceFilter.Draw("##source_filter");
     if(ImGui::BeginChild("##sources",ImVec2(300,std::max(1,std::min(8,static_cast<int>(choices.size())))*ImGui::GetTextLineHeightWithSpacing()+4)))
     {
         ImGuiListClipper clipper;clipper.Begin(static_cast<int>(choices.size()));
         while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i)
-            {ImGui::PushID(i);if(ImGui::Selectable(choices[i].label.c_str(),choices[i].value==value)){value=choices[i].value;std::snprintf(custom,sizeof(custom),"%s",value.c_str());changed=true;}ImGui::PopID();}
+            {if(!sourceFilter.PassFilter(choices[i].label.c_str())&&!sourceFilter.PassFilter(choices[i].value.c_str()))continue;
+            ImGui::PushID(i);if(ImGui::Selectable(choices[i].label.c_str(),choices[i].value==value)){value=choices[i].value;std::snprintf(custom,sizeof(custom),"%s",value.c_str());changed=true;}ImGui::PopID();}
         if(choices.empty())ImGui::TextDisabled(camera?"No cameras found.":"No capture windows found.");
     }
     ImGui::EndChild();ImGui::SetNextItemWidth(-1);
@@ -3215,6 +3222,9 @@ bool modelChoiceControl(const Node& node,std::string& value,int graph,int pin,In
     }
     bool changed=false;
     ImGui::TextDisabled("%s",depth?"models / depth_models":"models");
+    static ImGuiTextFilter modelFilter;
+    if(appearing)modelFilter.Clear();
+    modelFilter.Draw("##model_filter");
     const float rows=static_cast<float>(std::clamp<std::size_t>(modelMenu.choices.size(),1,10));
     modelMenu.rowHeight=ImGui::GetTextLineHeightWithSpacing();
     if(appearing)ImGui::SetNextWindowScroll(ImVec2(0,0));
@@ -3226,6 +3236,7 @@ bool modelChoiceControl(const Node& node,std::string& value,int graph,int pin,In
         while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i)
         {
             const auto& item=modelMenu.choices[i];ImGui::PushID(i);
+            if(!modelFilter.PassFilter(item.name.c_str())&&!modelFilter.PassFilter(item.path.c_str())){ImGui::PopID();continue;}
             if(ImGui::Selectable("##model",modelMenu.selected==i))
             {value=item.path;changed=true;owned=ImGui::GetCurrentContext()->LastItemData;ImGui::CloseCurrentPopup();}
             const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();

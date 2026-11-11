@@ -68,13 +68,6 @@ void draw_input_device()
                 port_list.push_back("COM" + std::to_string(i));
             }
 
-            std::vector<const char*> port_items;
-            port_items.reserve(port_list.size());
-            for (const auto& port : port_list)
-            {
-                port_items.push_back(port.c_str());
-            }
-
             int port_index = 0;
             for (size_t i = 0; i < port_list.size(); ++i)
             {
@@ -85,7 +78,7 @@ void draw_input_device()
                 }
             }
 
-            if (OverlayUI::ComboRow(config.input_method == "TEENSY41" ? "Teensy Port" : "Arduino Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::FilteredComboRow(config.input_method == "TEENSY41" ? "Teensy Port" : "Arduino Port", &port_index, port_list))
             {
                 config.arduino_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
@@ -161,13 +154,6 @@ void draw_input_device()
                 port_list.push_back("COM" + std::to_string(i));
             }
 
-            std::vector<const char*> port_items;
-            port_items.reserve(port_list.size());
-            for (const auto& port : port_list)
-            {
-                port_items.push_back(port.c_str());
-            }
-
             int port_index = 0;
             for (size_t i = 0; i < port_list.size(); ++i)
             {
@@ -178,7 +164,7 @@ void draw_input_device()
                 }
             }
 
-            if (OverlayUI::ComboRow("RP2350 Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::FilteredComboRow("RP2350 Port", &port_index, port_list))
             {
                 config.rp2350_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
@@ -472,13 +458,6 @@ void draw_input_device()
                 port_list.push_back("COM" + std::to_string(i));
             }
 
-            std::vector<const char*> port_items;
-            port_items.reserve(port_list.size());
-            for (const auto& port : port_list)
-            {
-                port_items.push_back(port.c_str());
-            }
-
             int port_index = 0;
             for (size_t i = 0; i < port_list.size(); ++i)
             {
@@ -489,7 +468,7 @@ void draw_input_device()
                 }
             }
 
-            if (OverlayUI::ComboRow("Makcu Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::FilteredComboRow("Makcu Port", &port_index, port_list))
             {
                 config.makcu_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
