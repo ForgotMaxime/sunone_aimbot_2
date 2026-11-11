@@ -12,6 +12,7 @@
 | [Circle FOV](guides/circle-fov.md) | Circular target limits and display |
 | [Data collection](guides/data-collection.md) | Saving frames and labels |
 | [Recipes](guides/recipes.md) | Config examples and benchmarks |
+| [TensorRT export](guides/trt-export.md) | Static 320 FP16, CUDA-graphs, letterbox, tracker |
 | [Troubleshooting](guides/troubleshooting.md) | Diagnostic checklist |
 | [Build workflow](guides/build-workflow.md) | Setup and local rebuilds |
 
