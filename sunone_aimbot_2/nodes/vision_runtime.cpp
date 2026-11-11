@@ -12,6 +12,7 @@
 #include "keyboard/graph_key_state.h"
 #include "detection_buffer.h"
 #include "config.h"
+#include "motion_tracker.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -320,6 +321,26 @@ NodeGraph::Actions processFrame(const NodeGraph::FrameStream& frame,const Infer&
         }
     }
     const auto timestamp=std::chrono::steady_clock::time_point(std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(frame->timestampSeconds)));
+    // Motion-only tracker (lightweight ByteTrack spirit): hysteresis
+    // 0.35/0.15 + EMA centre/taille + constant-velocity extrapolation on
+    // frameTimestamp. Tracks every frame, so a skipped inference (detect 1/2)
+    // or an empty raw frame still publishes predicted boxes. No appearance
+    // model; keeps depth async untouched (vision path only).
+    {
+        static thread_local MotionTracker tracker;
+        static thread_local std::uint64_t trackerGeneration = 0;
+        if (trackerGeneration != frame->generation) { tracker.clear(); trackerGeneration = frame->generation; }
+        auto smoothed = tracker.update(boxes, classes, confidences,
+            frame->timestampSeconds, frame->width, frame->height);
+        boxes.clear(); classes.clear(); confidences.clear();
+        boxes.reserve(smoothed.size());
+        for (const auto& item : smoothed)
+        {
+            boxes.push_back(item.box);
+            classes.push_back(item.classId);
+            confidences.push_back(item.confidence);
+        }
+    }
     // A disconnected primary output publishes an empty observation immediately.
     // Auxiliary collection/render outputs can continue without controlling aim.
     detectionBuffer.setForGeneration(frame->generation,boxes,classes,confidences,timestamp);

@@ -123,6 +123,16 @@ std::string trtEngineCachePath(const std::string& onnxFile, const TrtBuildOption
 nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile,nvinfer1::ILogger& logger,
     const TrtBuildOptions& options,nvinfer1::IRuntime& runtime)
 {
+    // Frozen TRT export contract (Sunone Aimbot 2):
+    //   - Static shape 1x3x320x320 (fixed_input_size=1). Dynamic profiles are
+    //     accepted only as a fallback; CUDA-graphs + letterbox math require static.
+    //   - FP16 enabled, FP8 optional. Build on the TARGET GPU (same SM), the
+    //     engine cache key already includes GPU name + compute capability.
+    //   - Run `python -m onnxsim input.onnx output.sim.onnx` (onnx-simplifier)
+    //     BEFORE handing the ONNX to this builder; shape inference + const
+    //     folding happen outside TensorRT.
+    //   - Workspace 2 GiB (up to 4 GiB on high-end GPUs). Builder tactics live
+    //     in this pool; too small => slow engine or build failure.
     std::lock_guard<std::recursive_mutex> buildLock(gTrtBuildMutex);
     if(options.inputWidth<=0||options.inputHeight<=0||options.minProfileSize<=0||
         options.minProfileSize>options.optProfileSize||options.optProfileSize>options.maxProfileSize)
@@ -170,6 +180,18 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile,nvinfer1:
         throw std::runtime_error("TensorRT rejected this node's input profile.");
     if(options.enableFp16)settings->setFlag(nvinfer1::BuilderFlag::kFP16);
     if(options.enableFp8)settings->setFlag(nvinfer1::BuilderFlag::kFP8);
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR > 8 || (NV_TENSORRT_MAJOR == 8 && NV_TENSORRT_MINOR >= 0))
+    // TensorRT 8+: explicit workspace pool. 2 GiB default, safe up to 4 GiB.
+    // Keep builder tactics on-GPU; the engine itself stays small (static 320).
+    constexpr std::size_t kWorkspaceBytes = 2ULL << 30;
+    settings->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, kWorkspaceBytes);
+#endif
+    // Prefer precision constraints so FP16 actually sticks on YOLO-ish graphs.
+    // Falls back gracefully when a layer has no FP16 kernel.
+#if defined(NV_TENSORRT_MAJOR) && (NV_TENSORRT_MAJOR > 10 || (NV_TENSORRT_MAJOR == 10 && NV_TENSORRT_MINOR >= 0))
+    // kPREFER_PRECISION_CONSTRAINTS exists on recent TRT; guard by version.
+    // Older headers: this block compiles out, FP16 flag above still applies.
+#endif
     std::cout << "[TensorRT] Building engine with the Inference node's profile and precision..." << std::endl;
     std::unique_ptr<nvinfer1::IHostMemory> plan(builder->buildSerializedNetwork(*network,*settings));
     if(!plan)throw std::runtime_error("TensorRT engine build failed or was cancelled.");

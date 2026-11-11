@@ -83,6 +83,16 @@ private:
     int inferenceWidth=320,inferenceHeight=320;
     bool pinnedOutputsEnabled=true;
     double imageScaleY=1;
+    // Letterbox (aspect-preserved) mapping: net input <-> source packet.
+    // Computed per preprocess call (synchronous infer path), consumed by postProcess.
+    float letterboxScale=1.0f;
+    float letterboxPadX=0.0f;
+    float letterboxPadY=0.0f;
+    int letterboxSrcWidth=320;
+    int letterboxSrcHeight=320;
+    int netInputWidth=320;
+    int netInputHeight=320;
+    bool efficientNmsDetected=false;
     std::vector<Detection> inferGraphFrame(const cv::Mat& cpu,const cv::cuda::GpuMat& gpu,const NodeGraph::Node& settings);
 
     void loadEngine(const std::string& engineFile);
@@ -94,11 +104,13 @@ private:
     cv::cuda::GpuMat gpuFrameBuffer;
     cv::cuda::GpuMat gpuResizedBuffer;
     cv::cuda::GpuMat gpuFloatBuffer;
+    cv::cuda::GpuMat gpuLetterboxTmp;
     cv::cuda::Stream cvStream;
 
     cv::Mat cpuBgrBuffer;
     cv::Mat cpuResizedBuffer;
     cv::Mat cpuFloatBuffer;
+    cv::Mat cpuLetterboxTmp;
     std::vector<float> inputHostBuffer;
 
     std::vector<Detection> postProcess(

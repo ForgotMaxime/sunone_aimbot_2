@@ -179,9 +179,23 @@ void TrtDetector::destroyCudaGraph()
 void TrtDetector::captureCudaGraph()
 {
     if (!useCudaGraph || cudaGraphCaptured) return;
+    // CUDA-graphs require static shapes + pinned outputs. The graph captures
+    // inference + DToH only; OpenCV preprocess stays outside (not capturable)
+    // but runs on the same stream, fused as cvtColor/resize/convertTo + the
+    // hwc_to_chw_norm kernel back-to-back before the graph launch.
+    if (!pinnedOutputsEnabled) return;
 
     destroyCudaGraph();
 
+    cudaStreamSynchronize(stream);
+
+    // Blank warmup enqueue (autotune + lazy init) BEFORE capture. Never capture
+    // the first-ever enqueue: kernels, tactics and addresses must be settled.
+    if (!context->enqueueV3(stream))
+    {
+        std::cerr << "[Detector] Warmup enqueue failed, skipping CUDA graph." << std::endl;
+        return;
+    }
     cudaStreamSynchronize(stream);
 
     cudaError_t st = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
@@ -442,6 +456,17 @@ void TrtDetector::initialize(const std::string& modelFile,const NodeGraph::Node&
 
     img_scale = static_cast<float>(inferenceWidth) / w;
     imageScaleY=static_cast<double>(inferenceHeight)/h;
+    // Static 1x3x320x320 contract: net size comes from the engine. Letterbox
+    // scale/pads are refreshed on every preprocess call (source may vary);
+    // img_scale/imageScaleY kept for telemetry/compat (uniform scale ≈ img_scale
+    // when the source is square, which detection_resolution guarantees).
+    netInputWidth=w;netInputHeight=h;
+    letterboxScale=std::min(static_cast<float>(w)/std::max(1,inferenceWidth),
+        static_cast<float>(h)/std::max(1,inferenceHeight));
+    letterboxPadX=(static_cast<float>(w)-inferenceWidth*letterboxScale)*0.5f;
+    letterboxPadY=(static_cast<float>(h)-inferenceHeight*letterboxScale)*0.5f;
+    letterboxSrcWidth=inferenceWidth;letterboxSrcHeight=inferenceHeight;
+    efficientNmsDetected=false;
 
     gpuResizedBuffer.create(h, w, CV_8UC3);
     gpuFloatBuffer.create(h, w, CV_32FC3);
@@ -745,17 +770,33 @@ void TrtDetector::preProcess(const cv::Mat& frame)
         return;
     }
 
-    cv::Mat resizedBgr;
-    if (bgrFrame.cols != w || bgrFrame.rows != h)
+    // Aspect-preserved letterbox (YOLO standard, fill 114). Inverse mapping in
+    // postProcess(): x_src = (x_net - padX) / scale.
+    const int srcW = bgrFrame.cols, srcH = bgrFrame.rows;
+    const float scale = std::min(static_cast<float>(w) / srcW, static_cast<float>(h) / srcH);
+    const int newW = std::max(1, static_cast<int>(std::lround(srcW * scale)));
+    const int newH = std::max(1, static_cast<int>(std::lround(srcH * scale)));
+    const float padX = (static_cast<float>(w) - newW) * 0.5f;
+    const float padY = (static_cast<float>(h) - newH) * 0.5f;
+    letterboxScale = scale; letterboxPadX = padX; letterboxPadY = padY;
+    letterboxSrcWidth = srcW; letterboxSrcHeight = srcH;
+    img_scale = scale; imageScaleY = static_cast<double>(scale);
+
+    cpuResizedBuffer.setTo(cv::Scalar(114, 114, 114));
+    if (newW != w || newH != h)
     {
-        cv::resize(bgrFrame, cpuResizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR);
-        resizedBgr = cpuResizedBuffer;
+        cv::resize(bgrFrame, cpuLetterboxTmp, cv::Size(newW, newH), 0, 0, cv::INTER_LINEAR);
+        cv::Rect roi(static_cast<int>(std::lround(padX)), static_cast<int>(std::lround(padY)), newW, newH);
+        roi &= cv::Rect(0, 0, w, h);
+        cv::Mat dstRoi = cpuResizedBuffer(roi);
+        cv::Mat srcRoi = cpuLetterboxTmp(cv::Rect(0, 0, roi.width, roi.height));
+        srcRoi.copyTo(dstRoi);
     }
     else
     {
-        resizedBgr = bgrFrame;
+        bgrFrame.copyTo(cpuResizedBuffer);
     }
-    resizedBgr.convertTo(cpuFloatBuffer, CV_32FC3, 1.0f / 255.0f);
+    cpuResizedBuffer.convertTo(cpuFloatBuffer, CV_32FC3, 1.0f / 255.0f);
 
     copyCpuTensorToDevice(cpuFloatBuffer, w, h, inputBuffer);
 }
@@ -801,17 +842,32 @@ void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
         return;
     }
 
-    cv::cuda::GpuMat resizedBgr;
-    if (bgrFrame.cols != w || bgrFrame.rows != h)
+    // Aspect-preserved letterbox on GPU (same math as CPU path). Fused chain on
+    // one stream: cvtColor -> resize -> pad(114) -> convertTo -> hwc_to_chw_norm.
+    const int srcW = bgrFrame.cols, srcH = bgrFrame.rows;
+    const float scale = std::min(static_cast<float>(w) / srcW, static_cast<float>(h) / srcH);
+    const int newW = std::max(1, static_cast<int>(std::lround(srcW * scale)));
+    const int newH = std::max(1, static_cast<int>(std::lround(srcH * scale)));
+    const float padX = (static_cast<float>(w) - newW) * 0.5f;
+    const float padY = (static_cast<float>(h) - newH) * 0.5f;
+    letterboxScale = scale; letterboxPadX = padX; letterboxPadY = padY;
+    letterboxSrcWidth = srcW; letterboxSrcHeight = srcH;
+    img_scale = scale; imageScaleY = static_cast<double>(scale);
+
+    gpuResizedBuffer.setTo(cv::Scalar(114, 114, 114), cvStream);
+    if (newW != w || newH != h)
     {
-        cv::cuda::resize(bgrFrame, gpuResizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
-        resizedBgr = gpuResizedBuffer;
+        cv::cuda::resize(bgrFrame, gpuLetterboxTmp, cv::Size(newW, newH), 0, 0, cv::INTER_LINEAR, cvStream);
+        cv::Rect roi(static_cast<int>(std::lround(padX)), static_cast<int>(std::lround(padY)), newW, newH);
+        roi &= cv::Rect(0, 0, w, h);
+        if (roi.width > 0 && roi.height > 0)
+            gpuLetterboxTmp(cv::Rect(0, 0, roi.width, roi.height)).copyTo(gpuResizedBuffer(roi), cvStream);
     }
     else
     {
-        resizedBgr = bgrFrame;
+        bgrFrame.copyTo(gpuResizedBuffer, cvStream);
     }
-    resizedBgr.convertTo(gpuFloatBuffer, CV_32FC3, 1.0 / 255.0, 0.0, cvStream);
+    gpuResizedBuffer.convertTo(gpuFloatBuffer, CV_32FC3, 1.0 / 255.0, 0.0, cvStream);
 
     launch_hwc_to_chw_norm(
         gpuFloatBuffer.ptr<float>(),
@@ -870,21 +926,60 @@ std::vector<Detection> TrtDetector::postProcess(const float* output, const std::
     if (shapeIt == outputShapes.end())
         return {};
 
+    // EfficientNMS_TRT hook (optional export with nms=True): output is
+    // [N,6] / [1,N,6] xyxy+conf+class, already NMSed. The CPU YOLO path below
+    // decodes it directly; keep CPU NMS enabled only when the user asks
+    // (nms_threshold < 1). No behaviour break for raw YOLO outputs.
+    efficientNmsDetected = false;
+    if (shapeIt->second.size() >= 2 && shapeIt->second.back() == 6)
+        efficientNmsDetected = true;
+
+    // Per-class confidence: postProcessYolo takes objectness*maxClassScore and
+    // thresholds the winning class, i.e. one threshold applied per class.
+    // max_det clamped to [20,50]: enough for dense scenes, bounded for NMS cost.
+    const int rawMax = std::max(1, static_cast<int>(NodeGraph::parameter(inferenceSettings, "max_detections")));
+    const int maxDet = std::clamp(rawMax, 20, 50);
+
     std::vector<Detection> detections;
-    
+
     detections = postProcessYolo(
         output,
         shapeIt->second,
         NodeGraph::parameter(inferenceSettings,"class_count")>0?static_cast<int>(NodeGraph::parameter(inferenceSettings,"class_count")):numClasses,
         static_cast<float>(NodeGraph::parameter(inferenceSettings,"confidence_threshold")),
         static_cast<float>(NodeGraph::parameter(inferenceSettings,"nms_threshold")),
-        std::max(1,static_cast<int>(NodeGraph::parameter(inferenceSettings,"max_detections"))),
-        nmsTime,img_scale
+        maxDet,
+        nmsTime, 1.0f // decode in NET pixels; letterbox inverse applied below
     );
-    if(img_scale>0&&std::abs(imageScaleY-img_scale)>1e-6)
+    // Exact letterbox inverse: net -> source packet.
+    if (letterboxScale > 1e-6f)
     {
-        const double ratio=imageScaleY/img_scale;
-        for(auto& detection:detections){detection.box.y=static_cast<int>(detection.box.y*ratio);detection.box.height=static_cast<int>(detection.box.height*ratio);}
+        const float inv = 1.0f / letterboxScale;
+        for (auto& detection : detections)
+        {
+            const float xNet = static_cast<float>(detection.box.x);
+            const float yNet = static_cast<float>(detection.box.y);
+            const float wNet = static_cast<float>(detection.box.width);
+            const float hNet = static_cast<float>(detection.box.height);
+            float x = (xNet - letterboxPadX) * inv;
+            float y = (yNet - letterboxPadY) * inv;
+            float w = wNet * inv;
+            float h = hNet * inv;
+            // Clip to source packet.
+            x = std::clamp(x, 0.0f, static_cast<float>(std::max(0, letterboxSrcWidth)));
+            y = std::clamp(y, 0.0f, static_cast<float>(std::max(0, letterboxSrcHeight)));
+            w = std::clamp(w, 0.0f, static_cast<float>(std::max(0, letterboxSrcWidth)) - x);
+            h = std::clamp(h, 0.0f, static_cast<float>(std::max(0, letterboxSrcHeight)) - y);
+            detection.box.x = static_cast<int>(std::lround(x));
+            detection.box.y = static_cast<int>(std::lround(y));
+            detection.box.width = std::max(1, static_cast<int>(std::lround(w)));
+            detection.box.height = std::max(1, static_cast<int>(std::lround(h)));
+        }
+        // Drop boxes fully outside (rounding may yield 1px at edge; keep those).
+        detections.erase(std::remove_if(detections.begin(), detections.end(),
+            [&](const Detection& d) {
+                return d.box.x >= letterboxSrcWidth || d.box.y >= letterboxSrcHeight;
+            }), detections.end());
     }
     return detections;
 }
