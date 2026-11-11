@@ -2,7 +2,7 @@
 #include "Game_overlay.h"
 
 Game_overlay* gameOverlayPtr = nullptr;
-std::thread gameOverlayThread;
+std::jthread gameOverlayThread;
 std::atomic<bool> gameOverlayShouldExit(false);
 
 std::mutex g_trackerDebugMutex;

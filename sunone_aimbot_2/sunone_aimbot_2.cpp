@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <thread>
+#include <stop_token>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
@@ -18,6 +19,7 @@
 #include <array>
 #include <cwchar>
 #include <memory>
+#include <utility>
 
 #include <opencv2/core/utils/logger.hpp>
 
@@ -123,9 +125,13 @@ static void HandleThreadCrash(const char* name, const std::exception* ex)
 }
 
 template <typename Func>
-static std::thread StartThreadGuarded(const char* name, Func func)
+static std::jthread StartThreadGuarded(const char* name, Func func)
 {
-    return std::thread([name, func]() mutable {
+    // std::jthread carries a stop_token and joins on destruction, so an
+    // exception in main() no longer needs manual join bookkeeping.
+    // Worker loops still stop through the existing shouldExit atomics;
+    // the token is plumbed for cooperative cancellation without rewrites.
+    return std::jthread([name, func = std::move(func)](std::stop_token) mutable {
         try
         {
             func();
@@ -345,7 +351,7 @@ int main(int argc, char** argv)
         assignInputDevices();
 
 #ifndef USE_CUDA
-        std::thread dml_detThread;
+        std::jthread dml_detThread;
         DirectMLDetector* newDmlDetector = nullptr;
         try
         {
@@ -377,22 +383,22 @@ int main(int argc, char** argv)
 
         detection_resolution_changed.store(true);
 
-        std::thread keyThread = StartThreadGuarded("KeyboardListener", [] {
+        std::jthread keyThread = StartThreadGuarded("KeyboardListener", [] {
             keyboardListener();
             });
-        std::thread capThread = StartThreadGuarded("CaptureThread", [] {
+        std::jthread capThread = StartThreadGuarded("CaptureThread", [] {
             captureThread(config.detection_resolution, config.detection_resolution);
             });
 
 #ifdef USE_CUDA
-        std::thread trt_detThread = StartThreadGuarded("TrtDetector", [] {
+        std::jthread trt_detThread = StartThreadGuarded("TrtDetector", [] {
             trt_detector.inferenceThread();
             });
 #endif
-        std::thread mouseMovThread = StartThreadGuarded("MouseThread", [&mouseThread] {
+        std::jthread mouseMovThread = StartThreadGuarded("MouseThread", [&mouseThread] {
             mouseThreadFunction(mouseThread);
             });
-        std::thread overlayThread = StartThreadGuarded("OverlayThread", [] {
+        std::jthread overlayThread = StartThreadGuarded("OverlayThread", [] {
             OverlayThread();
             });
 
