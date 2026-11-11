@@ -29,6 +29,12 @@ struct TargetSelectionSettings
     double bodyOffset = 0.15;
     double headOffset = 0.05;
     int maxMissedFrames = 6;
+    // Humanizer stickiness (anti-pullback). Disabled by default: when
+    // stickinessEnabled == false the legacy nearest-track behavior is kept.
+    bool stickinessEnabled = false;
+    double stickinessMarginPx = 25.0;
+    int stickinessHoldFrames = 3;
+    double switchCooldownMs = 120.0;
 };
 
 AimbotTarget* sortTargets(
@@ -113,6 +119,8 @@ private:
     static float iou(const cv::Rect2f& a, const cv::Rect2f& b);
     int findTrackIndexById(int id) const;
     int chooseBestTrack(int screenWidth, int screenHeight) const;
+    int chooseBestTrack(int screenWidth, int screenHeight,
+        const TargetSelectionSettings& settings);
     int allowedMissedFrames(const TrackState& t) const;
     void pruneDeadTracks();
 
@@ -122,6 +130,11 @@ private:
     int maxMissedFrames_ = 6;
     double frameDtMeanSec_ = 1.0 / 60.0;
     std::chrono::steady_clock::time_point lastTrackerFrameTime_{};
+    // Humanizer stickiness (anti-pullback): hysteresis against instant switch.
+    // Mutable so the const legacy chooseBestTrack() overload stays compatible.
+    mutable int pendingSwitchId_ = -1;
+    mutable int pendingSwitchFrames_ = 0;
+    mutable std::chrono::steady_clock::time_point lastSwitchTime_{};
 };
 
 #endif // AIMBOTTARGET_H
