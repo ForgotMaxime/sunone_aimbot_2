@@ -129,7 +129,14 @@ void draw_model_export()
         std::string label="Select model...";for(const auto& file:files)if(file.path==selected)label=file.label;
         if(ImGui::BeginCombo("##model",label.c_str()))
         {
-            for(const auto& file:files)if(ImGui::Selectable(file.label.c_str(),selected==file.path)){selected=file.path;customPath[0]=0;error.clear();}
+            static ImGuiTextFilter onnxFilter;
+            if(ImGui::IsWindowAppearing())onnxFilter.Clear();
+            onnxFilter.Draw("##onnx_filter");
+            for(const auto& file:files)
+            {
+                if(!onnxFilter.PassFilter(file.label.c_str())&&!onnxFilter.PassFilter(file.path.c_str()))continue;
+                if(ImGui::Selectable(file.label.c_str(),selected==file.path)){selected=file.path;customPath[0]=0;error.clear();}
+            }
             if(files.empty())ImGui::TextDisabled("No ONNX models found.");ImGui::EndCombo();
         }
         OverlayUI::EndSettingRow(row);

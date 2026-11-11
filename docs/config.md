@@ -249,17 +249,28 @@ CUDA capture can still create CPU copies when preview, debugging, data collectio
 | `button_open_overlay` | `Home` | Open overlay hotkey. |
 | `enable_arrows_settings` | `false` | Enables arrow-key settings behavior. |
 
-Use `None` to disable a button where supported.
+Use `None` to disable a button where supported. Multiple comma-separated entries act as alternatives (any pressed counts).
+
+In the overlay Hotkeys tab, left-click a slot to capture the next pressed key or mouse button (Esc cancels, 10 s timeout), right-click a slot to reset it to `None`, and use `+`/`-` to manage alternatives. Conflicting assignments across rows are reported in red below the rows. `HOME` opens the editor, `F2` exits, `F3` pauses and `F4` reloads; keep these four on distinct keys.
+
+## Schema, Backups and Atomic Saves
+
+| Key | Default | Meaning |
+|---|---|---:|
+| `schema_version` | `2` | Config schema. Older files are migrated forward on load. |
+
+The editor writes `config.ini` atomically (temp file + replace) after a 0.35 s debounce, and only when no widget is active. The previous file is kept as `config.ini.bak`. Unsaved changes show a dot on every sidebar tab; a toast confirms each save, and settings reloads show a "Settings reloaded (F4)" toast. Every ranged value is clamped on load and before save (see ranges below).
 
 ## Overlay
 
 | Key | Default | Meaning |
 |---|---:|---|
 | `overlay_opacity` | `225` | Overlay opacity, `0..255`. |
-| `overlay_ui_scale` | `1.0` | Overlay UI scale. |
+| `overlay_ui_scale` | `1.0` | Overlay UI scale, clamped `0.85..1.35`. |
 | `overlay_sidebar_collapsed` | `false` | Show only sidebar icons. The sidebar chevron toggles this preference; changes save automatically. |
 | `local_mcp_enabled` | `true` | Allow local workflow agents; controlled in System → Agent access. |
 | `overlay_exclude_from_capture` | `true` | Attempts to keep overlay out of captured frames. |
+| `overlay_vsync` | `false` | Editor VSync (`Present(1)`). Off keeps the lowest input latency. |
 | `overlay_x` | `0` | Overlay editor window X position. Auto-saved after moving. |
 | `overlay_y` | `0` | Overlay editor window Y position. Auto-saved after moving. |
 | `overlay_width` | `1180` | Preferred editor window width. Limited to the monitor work area and auto-saved after resizing. |
@@ -346,6 +357,8 @@ Data collection needs CPU-readable frames, so it can change capture performance 
 ## Game Profiles
 
 On migration, alternative `[Games]` settings become disabled Mouse calibration nodes. Edit calibration inputs directly in the graph; aiming and recoil share the same named source. Legacy entry format: `name = sensitivity,yaw,pitch[,fovScaled,baseFOV]`.
+
+The Hotkeys tab also mirrors profiles as `presets/<name>.json` (created from `[Games]` on first open, never overwritten). Applying a preset sets `active_game` and saves `config.ini`; press `F4` so graphs reload the values.
 
 ```ini
 active_game = UNIFIED

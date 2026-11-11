@@ -9,6 +9,9 @@
 class Config
 {
 public:
+    // Schema version for config.ini migrations.
+    static constexpr int kCurrentSchemaVersion = 2;
+    int schema_version = 1;
     // Capture
     std::string capture_method; // "duplication_api", "winrt", "virtual_camera", "udp_capture"
     std::string capture_target;
@@ -193,6 +196,7 @@ public:
     bool overlay_sidebar_collapsed = false;
     bool local_mcp_enabled = true;
     bool overlay_exclude_from_capture;
+    bool overlay_vsync = false;
     int overlay_x;
     int overlay_y;
     int overlay_width;
@@ -296,6 +300,10 @@ public:
     bool saveConfig(const std::string& filename = "config.ini");
     bool reloadApplicationSettings(const std::string& filename = "config.ini");
     bool sameInputDeviceSettings(const Config& other) const;
+    // Bring schema_version up to kCurrentSchemaVersion, filling new keys.
+    void migrate(int fromVersion);
+    // Clamp every ranged value back into its supported interval.
+    void validateAndClamp();
 
     std::string joinStrings(const std::vector<std::string>& vec, const std::string& delimiter = ",");
 private:

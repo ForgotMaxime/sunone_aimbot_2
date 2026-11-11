@@ -720,6 +720,12 @@ static bool DrawSidebarTabButton(const OverlayTabItem& tab, bool selected, float
         ImGui::EndTooltip();
     }
 
+    // Unsaved-changes pastille: one dot per tab while the debounced
+    // config autosave is still pending.
+    if (OverlayConfig_IsDirty())
+        draw->AddCircleFilled(ImVec2(max.x - 10.0f * g_runtimeUiScale, pos.y + 9.0f * g_runtimeUiScale),
+            3.2f * g_runtimeUiScale, IM_COL32(252, 225, 115, 255), 12);
+
     return pressed;
 }
 
@@ -1479,6 +1485,10 @@ void SetupImGui()
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
 
+    // The editor uses a fixed sidebar layout; keep ImGui DockSpace OFF so no
+    // dock targets, guides or extra windows can appear.
+    io.ConfigFlags &= ~static_cast<ImGuiConfigFlags>(ImGuiConfigFlags_DockingEnable);
+
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
@@ -1841,6 +1851,7 @@ static HRESULT RenderOverlayFrame(bool allowAutoResize, bool allowConfigSave)
 
         if (allowConfigSave)
             OverlayConfig_TrySave();
+        OverlayConfig_DrawStatusToast();
     }
 
     ImGui::End();
@@ -1856,7 +1867,12 @@ static HRESULT RenderOverlayFrame(bool allowAutoResize, bool allowConfigSave)
     g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-    const HRESULT result = g_pSwapChain->Present(0, 0);
+    bool useVsync = false;
+    {
+        std::lock_guard<std::mutex> lock(configMutex);
+        useVsync = config.overlay_vsync;
+    }
+    const HRESULT result = g_pSwapChain->Present(useVsync ? 1 : 0, 0);
     g_renderingOverlayFrame = false;
     NodeEditor_RunFileActions();
     ApplyPendingWindowAction();
@@ -1944,7 +1960,16 @@ void OverlayThread()
 
         if (!g_overlayVisible)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Hidden or minimized editor: back off to 16 ms so the loop
+            // stays cheap while HOME can still wake it quickly.
+            const bool minimized = g_hwnd && ::IsIconic(g_hwnd);
+            std::this_thread::sleep_for(std::chrono::milliseconds(minimized ? 16 : 10));
+            continue;
+        }
+
+        if (g_hwnd && ::IsIconic(g_hwnd))
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
             continue;
         }
 
@@ -2017,6 +2042,7 @@ void Overlay_ApplicationSettingsChanged(const Config& before)
 {
     if(!config.sameInputDeviceSettings(before))input_method_changed=true;
     if(config.overlay_opacity!=before.overlay_opacity)Overlay_SetOpacity(config.overlay_opacity);
+    OverlayConfig_NotifyReloaded();
     OverlayConfig_MarkDirty();
 }
 bool Overlay_StartMcp()
