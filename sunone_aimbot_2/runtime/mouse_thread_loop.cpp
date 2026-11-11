@@ -9,6 +9,7 @@
 #include <memory>
 #include <limits>
 #include <optional>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -68,7 +69,67 @@ struct SelectionState
     double velocityX = 0.0, velocityY = 0.0;
     int missedFrames = 0;
     std::chrono::steady_clock::time_point updatedAt{};
+    // Humanizer variable delays (Target/Switch/Kill/VisCheck/Aim, 30-120ms).
+    // All zero/disabled by default; sampled once per lock/switch event.
+    std::chrono::steady_clock::time_point firstSeenAt{};
+    std::chrono::steady_clock::time_point lastObservedAt{};
+    std::chrono::steady_clock::time_point lostAt{};
+    std::optional<AimbotTarget> lastKnownTarget;
+    int lastKnownTrackId = -1;
+    double targetDelayMs = 0.0;
+    double switchDelayMs = 0.0;
+    double aimDelayMs = 0.0;
+    double visCheckDelayMs = 0.0;
+    double killDelayMs = 0.0;
+    bool delayArmed = false;
 };
+
+inline double sampleDelayMs(double baseMs, double jitterMs)
+{
+    if (!(baseMs > 0.0))
+        return 0.0;
+    const double jitter = std::clamp(jitterMs, 0.0, 90.0);
+    thread_local std::mt19937 rng{ std::random_device{}() };
+    double lo = std::max(30.0, baseMs - jitter);
+    double hi = std::clamp(baseMs + jitter, 30.0, 120.0);
+    if (hi < lo) std::swap(lo, hi);
+    if (hi <= lo) return std::clamp(baseMs, 30.0, 120.0);
+    std::uniform_real_distribution<double> d(lo, hi);
+    return d(rng);
+}
+
+inline double nodeDelayParam(const NodeGraph::Node& node, const char* key)
+{
+    const double v = NodeGraph::parameter(node, key);
+    if (!(v > 0.0)) return 0.0;
+    return std::clamp(v, 30.0, 120.0);
+}
+
+// Anti-recoil pattern-playback stub (P0-8). Disabled by default: when
+// patternEnabled is false the caller must use the legacy easynorecoilstrength
+// path unchanged. The pattern table is populated by future work (config key
+// humanizer_recoil_pattern_*) without changing the default behavior.
+struct RecoilPatternState
+{
+    bool patternEnabled = false;
+    std::vector<double> pattern;
+    std::size_t cursor = 0;
+    double jitterCounts = 0.0;
+};
+
+inline double resolveRecoilStrength(double legacyStrength, RecoilPatternState& st)
+{
+    if (!st.patternEnabled || st.pattern.empty())
+        return legacyStrength;
+    const double v = st.pattern[st.cursor % st.pattern.size()];
+    st.cursor++;
+    if (!(st.jitterCounts > 0.0))
+        return v;
+    thread_local std::mt19937 rng{ std::random_device{}() };
+    std::uniform_real_distribution<double> d(-st.jitterCounts, st.jitterCounts);
+    return v + d(rng);
+}
+}
 }
 
 void createInputDevices();
@@ -240,8 +301,25 @@ void mouseThreadFunction(MouseThread& mouseThread)
             settings.preferHead=NodeGraph::parameter(node,"prefer_head")!=0;
             settings.mergeHeadBody=NodeGraph::parameter(node,"merge_head_body")!=0;
             settings.maxMissedFrames=static_cast<int>(NodeGraph::parameter(node,"max_missed_frames"));
+            // Humanizer stickiness (anti-pullback): opt-in via node params,
+            // conservative defaults keep legacy nearest-track behavior.
+            settings.stickinessEnabled=NodeGraph::parameter(node,"humanizer_stickiness")!=0;
+            if (NodeGraph::parameter(node,"humanizer_stickiness_margin_px")!=0.0)
+                settings.stickinessMarginPx=std::clamp(NodeGraph::parameter(node,"humanizer_stickiness_margin_px"),0.0,256.0);
+            if (NodeGraph::parameter(node,"humanizer_stickiness_hold_frames")!=0.0)
+                settings.stickinessHoldFrames=std::clamp(static_cast<int>(NodeGraph::parameter(node,"humanizer_stickiness_hold_frames")),1,30);
+            if (NodeGraph::parameter(node,"humanizer_switch_cooldown_ms")!=0.0)
+                settings.switchCooldownMs=std::clamp(NodeGraph::parameter(node,"humanizer_switch_cooldown_ms"),0.0,1000.0);
             const bool disableHeadshot=NodeGraph::parameter(node,"disable_headshot")!=0;
             const auto now=std::chrono::steady_clock::now();
+            // Humanizer variable delays (30-120ms). Sampled once per event,
+            // zero (default) keeps the legacy immediate behavior.
+            const double jitterMs=std::clamp(NodeGraph::parameter(node,"humanizer_delay_jitter_ms"),0.0,90.0);
+            const double targetDelayBase=nodeDelayParam(node,"humanizer_target_delay_ms");
+            const double switchDelayBase=nodeDelayParam(node,"humanizer_switch_delay_ms");
+            const double aimDelayBase=nodeDelayParam(node,"humanizer_aim_delay_ms");
+            const double visDelayBase=nodeDelayParam(node,"humanizer_vischeck_delay_ms");
+            const double killDelayBase=nodeDelayParam(node,"humanizer_kill_delay_ms");
             if(state.version!=stream->version)
             {
                 std::vector<cv::Rect> boxes;
@@ -272,8 +350,40 @@ void mouseThreadFunction(MouseThread& mouseThread)
                         state.target=info.target;state.trackId=info.trackId;state.observed=info.observedThisFrame;
                         state.confidence=info.confidence;state.velocityX=info.velocityX;state.velocityY=info.velocityY;state.missedFrames=info.missedFrames;
                         state.moveEligible=state.observed||allowPredictedOnlyMove(previousTrackId,hadTarget,info,captureFps.load());
+                        // Arm variable delays on new lock / switch events.
+                        if (!state.delayArmed || previousTrackId != state.trackId)
+                        {
+                            const bool isSwitch = state.delayArmed && hadTarget && previousTrackId != -1 && previousTrackId != state.trackId;
+                            state.firstSeenAt = state.delayArmed ? state.firstSeenAt : now;
+                            if (!state.delayArmed)
+                            {
+                                state.firstSeenAt = now;
+                                state.targetDelayMs = sampleDelayMs(targetDelayBase, jitterMs);
+                                state.aimDelayMs = sampleDelayMs(aimDelayBase, jitterMs);
+                                state.visCheckDelayMs = sampleDelayMs(visDelayBase, jitterMs);
+                                state.killDelayMs = sampleDelayMs(killDelayBase, jitterMs);
+                                state.delayArmed = true;
+                            }
+                            if (isSwitch)
+                                state.switchDelayMs = sampleDelayMs(switchDelayBase, jitterMs);
+                            else if (!state.delayArmed)
+                                state.switchDelayMs = 0.0;
+                        }
+                        if (state.observed)
+                            state.lastObservedAt = now;
                     }
-                    else {state.target.reset();state.trackId=-1;state.observed=state.moveEligible=false;}
+                    else
+                    {
+                        // Kill delay: keep publishing the last known target for
+                        // killDelayMs instead of dropping it instantly.
+                        if (state.target && state.killDelayMs > 0.0 && state.lostAt.time_since_epoch().count() == 0)
+                        {
+                            state.lastKnownTarget = state.target;
+                            state.lastKnownTrackId = state.trackId;
+                            state.lostAt = now;
+                        }
+                        state.target.reset();state.trackId=-1;state.observed=state.moveEligible=false;
+                    }
                 }
                 else
                 {
@@ -296,6 +406,39 @@ void mouseThreadFunction(MouseThread& mouseThread)
             if(state.target&&now-state.updatedAt<=std::chrono::milliseconds(trackerStaleTimeoutMs(captureFps.load())))
             {
                 const auto& target=*state.target;
+                const double ageMs = std::chrono::duration<double, std::milli>(now - state.firstSeenAt).count();
+                bool gated = false;
+                // Target delay: wait after first sighting before publishing.
+                if (state.delayArmed && state.targetDelayMs > 0.0 && ageMs < state.targetDelayMs)
+                    gated = true;
+                // Aim delay: same gate, kept separate so graphs can stage
+                // acquisition (target) vs actuation (aim) independently.
+                if (state.delayArmed && state.aimDelayMs > 0.0 && ageMs < state.aimDelayMs)
+                    gated = true;
+                // Vis-check delay: require a fresh observation after the delay.
+                if (state.delayArmed && state.visCheckDelayMs > 0.0)
+                {
+                    const double sinceObsMs = state.lastObservedAt.time_since_epoch().count() == 0 ? 1e9 :
+                        std::chrono::duration<double, std::milli>(now - state.lastObservedAt).count();
+                    if (!state.observed || ageMs < state.visCheckDelayMs)
+                        gated = true;
+                    (void)sinceObsMs;
+                }
+                // Switch delay: hold the previous track briefly (stickiness at
+                // the runtime layer complements the tracker hysteresis).
+                if (state.delayArmed && state.switchDelayMs > 0.0 && state.lastKnownTrackId != -1 &&
+                    state.trackId != state.lastKnownTrackId && ageMs < state.switchDelayMs)
+                    gated = true;
+                if (gated)
+                {
+                    selected.valid = false;
+                    selected.observed = false;
+                    selected.fresh = false;
+                    selected.ageSeconds=std::max(0.0,std::chrono::duration<double>(now-state.updatedAt).count());
+                    return selected;
+                }
+                state.lostAt = {};
+                state.lastKnownTrackId = state.trackId;
                 selected.point={target.pivotX,target.pivotY};
                 selected.x=target.x;selected.y=target.y;selected.width=target.w;selected.height=target.h;
                 selected.valid=state.observed||state.moveEligible;selected.observed=state.observed;
@@ -312,6 +455,31 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 }
             }
             else if(state.target){state.target.reset();state.trackId=-1;state.observed=state.moveEligible=false;}
+            else if (state.lastKnownTarget && state.killDelayMs > 0.0 &&
+                state.lostAt.time_since_epoch().count() != 0 &&
+                std::chrono::duration<double, std::milli>(now - state.lostAt).count() < state.killDelayMs)
+            {
+                // Kill delay: coast the last known pivot without movement
+                // eligibility (no fresh observation), so overlays can fade
+                // instead of snapping. Movement stays gated via valid=false.
+                const auto& target = *state.lastKnownTarget;
+                selected.point = { target.pivotX, target.pivotY };
+                selected.x = target.x; selected.y = target.y; selected.width = target.w; selected.height = target.h;
+                selected.valid = false; selected.observed = false; selected.fresh = false;
+                selected.classId = target.classId;
+                selected.trackId = state.lastKnownTrackId;
+                selected.missedFrames = state.missedFrames;
+                selected.ageSeconds = std::max(0.0, std::chrono::duration<double>(now - state.updatedAt).count());
+                selected.pointPrepared = settings.applyOffsets;
+                return selected;
+            }
+            else if (state.lastKnownTarget)
+            {
+                state.lastKnownTarget.reset();
+                state.lastKnownTrackId = -1;
+                state.lostAt = {};
+                state.delayArmed = false;
+            }
             return selected;
         };
         context.inScope = [](const NodeGraph::TargetData& target,double multiplier,NodeGraph::Point center) {
@@ -425,7 +593,13 @@ void mouseThreadFunction(MouseThread& mouseThread)
         {
             // Device counts are integers. Carry sub-count strength between
             // active ticks instead of truncating each tick's movement to zero.
-            recoilRemainder += std::clamp(actions.recoilStrength, -1000.0, 1000.0);
+            // P0-8 anti-recoil pattern-playback stub: patternEnabled defaults to
+            // false so this resolves to the legacy easynorecoilstrength value.
+            // Future work fills recoilPattern.pattern from
+            // humanizer_recoil_pattern_* config without touching this call.
+            thread_local RecoilPatternState recoilPattern;
+            const double patterned = resolveRecoilStrength(actions.recoilStrength, recoilPattern);
+            recoilRemainder += std::clamp(patterned, -1000.0, 1000.0);
             const int compensation = static_cast<int>(recoilRemainder);
             recoilRemainder -= compensation;
             const double pixelsPerCount=actions.recoilPixelDeltaY/actions.recoilStrength;
