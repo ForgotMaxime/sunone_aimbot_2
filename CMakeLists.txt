@@ -672,6 +672,37 @@ if(BUILD_TESTING)
         target_compile_options(node_config_bridge_tests PRIVATE /W3 /permissive- /EHsc)
     endif()
     add_test(NAME node_config_migration COMMAND node_config_bridge_tests)
+    add_executable(postprocess_golden_tests
+        "${CMAKE_SOURCE_DIR}/tests/unit/postprocess_golden_tests.cpp"
+        "${SRC_DIR}/detector/postProcess.cpp")
+    target_include_directories(postprocess_golden_tests PRIVATE
+        "${SRC_DIR}"
+        "${AIMBOT_OPENCV_INCLUDE_DIR}")
+    target_compile_definitions(postprocess_golden_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
+    if(AIMBOT_ENABLE_AVX2)
+        target_compile_definitions(postprocess_golden_tests PRIVATE AIMBOT_HAVE_AVX2)
+    endif()
+    target_link_libraries(postprocess_golden_tests PRIVATE "${AIMBOT_OPENCV_LIBRARY}")
+    if(MSVC)
+        set_target_properties(postprocess_golden_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(postprocess_golden_tests PRIVATE /W3 /permissive- /EHsc)
+    endif()
+    # Same staging rule as the other OpenCV-linked tests: let ai copy the
+    # runtime DLLs first instead of racing it.
+    add_dependencies(postprocess_golden_tests ai)
+    add_test(NAME postprocess_golden_regressions COMMAND postprocess_golden_tests)
+    set_tests_properties(postprocess_golden_regressions PROPERTIES TIMEOUT 120)
+    add_executable(config_migrate_tests
+        "${CMAKE_SOURCE_DIR}/tests/unit/config_migrate_tests.cpp"
+        "${SRC_DIR}/nodes/node_graph.cpp"
+        "${SRC_DIR}/nodes/node_config_bridge.cpp"
+        "${SRC_DIR}/keyboard/keycodes.cpp")
+    target_include_directories(config_migrate_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config")
+    if(MSVC)
+        set_target_properties(config_migrate_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(config_migrate_tests PRIVATE /W3 /permissive- /EHsc)
+    endif()
+    add_test(NAME config_migrate_regressions COMMAND config_migrate_tests)
     add_executable(vision_outputs_tests
         "${CMAKE_SOURCE_DIR}/tests/vision_outputs_tests.cpp"
         "${SRC_DIR}/nodes/preview_image.cpp"
