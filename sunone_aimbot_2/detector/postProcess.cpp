@@ -15,6 +15,7 @@
 #endif
 
 #include "postProcess.h"
+#include "aimbot_tracy.h"
 
 namespace
 {
@@ -447,6 +448,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold, std::chrono::du
 
     auto t0 = std::chrono::steady_clock::now();
 
+    AIMBOT_ZONE;
     SortDetectionsByConfidence(detections);
 
     // Raw Inference nodes expose candidates to a separate graph NMS stage.

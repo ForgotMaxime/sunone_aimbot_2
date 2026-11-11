@@ -37,6 +37,7 @@
 #include "nodes/node_graph.h"
 #include "nodes/vision_runtime.h"
 #include "nodes/preview_image.h"
+#include "aimbot_tracy.h"
 #include <opencv2/imgproc.hpp>
 #include "runtime/input_state.h"
 #include "include/other_tools.h"
@@ -1898,6 +1899,8 @@ void OverlayThread()
 
     while (!shouldExit)
     {
+        AIMBOT_ZONE;
+        AIMBOT_FRAME_MARK;
         while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
             ::TranslateMessage(&msg);

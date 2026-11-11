@@ -23,6 +23,7 @@
 #include "nodes/vision_runtime.h"
 #include "postProcess.h"
 #include "capture.h"
+#include "aimbot_tracy.h"
 #include "runtime/input_state.h"
 #include "other_tools.h"
 
@@ -525,6 +526,7 @@ void DirectMLDetector::preprocessFrameToTensor(const cv::Mat& frame, float* dst,
 
 std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vector<cv::Mat>& frames, const NodeGraph::Node& settings)
 {
+    AIMBOT_ZONE;
     std::vector<std::vector<Detection>> empty;
     if (!isReady()) return empty;
     if (frames.empty()) return empty;

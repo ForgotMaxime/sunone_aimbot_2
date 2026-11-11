@@ -23,6 +23,7 @@
 #include "nodes/node_graph.h"
 #include "nodes/vision_outputs.h"
 #include "nodes/vision_runtime.h"
+#include "aimbot_tracy.h"
 
 namespace
 {
@@ -117,6 +118,8 @@ void mouseThreadFunction(MouseThread& mouseThread)
 
     while (!shouldExit)
     {
+        AIMBOT_ZONE;
+        AIMBOT_FRAME_MARK;
         bool hasNewDetection = false;
         int detectionResolution = 0;
         bool pausedNow = false;

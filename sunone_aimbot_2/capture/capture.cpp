@@ -22,6 +22,7 @@
 
 #include "capture.h"
 #include "nodes/vision_runtime.h"
+#include "aimbot_tracy.h"
 #ifdef USE_CUDA
 #include "trt_detector.h"
 #endif
@@ -351,6 +352,7 @@ std::vector<cv::Mat> getBatchFromQueue(int batch_size)
 
 void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 {
+    AIMBOT_ZONE;
     try
     {
         const bool initiallyRequested=NodeVision::syncCaptureConfiguration();

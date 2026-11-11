@@ -25,6 +25,7 @@
 
 #include "trt_detector.h"
 #include "nvinf.h"
+#include "aimbot_tracy.h"
 #include "tensorrt/trt_monitor.h"
 #include "sunone_aimbot_2.h"
 #include "other_tools.h"
@@ -577,6 +578,7 @@ std::vector<Detection> TrtDetector::detect(const NodeGraph::FrameStream& frame,c
 
 std::vector<Detection> TrtDetector::inferGraphFrame(const cv::Mat& cpu,const cv::cuda::GpuMat& gpu,const NodeGraph::Node& settings)
 {
+    AIMBOT_ZONE;
     std::vector<Detection> detections;
     if(!isInitialized()||(cpu.empty()&&gpu.empty()))return detections;
     inferenceSettings=settings;

@@ -26,6 +26,7 @@
 #include "nodes/vision_outputs.h"
 #include "nodes/vision_runtime.h"
 #include "overlay/drawing_renderer.h"
+#include "aimbot_tracy.h"
 
 extern std::string g_iconLastError;
 
@@ -235,6 +236,8 @@ void gameOverlayRenderLoop()
     RECT previous{};bool hasBounds=false;
     while(!gameOverlayShouldExit.load())
     {
+        AIMBOT_ZONE;
+        AIMBOT_FRAME_MARK;
         auto packets=NodeVision::overlayPackets();
         if(packets.empty()||detectionBuffer.isPaused())
         {
