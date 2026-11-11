@@ -97,25 +97,103 @@ nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& engineFile, nvinfer
     return engine;
 }
 
+namespace
+{
+// FNV-1a over file size + first/last 1 MiB sample. Cheap but robust against
+// silent model swaps that keep mtime/size identical (mtime+size stay inputs).
+std::uint64_t sampleOnnxHash(const std::filesystem::path& path, std::uint64_t seed)
+{
+    constexpr std::streamsize kSampleBytes = 1024 * 1024;
+    std::uint64_t hash = seed;
+    auto mix = [&](const unsigned char* data, std::streamsize count)
+    {
+        for (std::streamsize i = 0; i < count; ++i) { hash ^= data[i]; hash *= 1099511628211ull; }
+    };
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(path, error);
+    if (!error)
+        for (int i = 0; i < 8; ++i) { hash ^= static_cast<unsigned char>((bytes >> (i * 8)) & 0xff); hash *= 1099511628211ull; }
+    std::ifstream file(path, std::ios::binary);
+    if (!file.good()) return hash;
+    std::vector<char> buffer(static_cast<size_t>(kSampleBytes));
+    file.read(buffer.data(), kSampleBytes);
+    mix(reinterpret_cast<const unsigned char*>(buffer.data()), file.gcount());
+    if (bytes > static_cast<std::uint64_t>(kSampleBytes) * 2)
+    {
+        file.clear();
+        file.seekg(-kSampleBytes, std::ios::end);
+        file.read(buffer.data(), kSampleBytes);
+        mix(reinterpret_cast<const unsigned char*>(buffer.data()), file.gcount());
+    }
+    return hash;
+}
+
+std::string cudaRuntimeVersionString()
+{
+    int version = 0;
+    if (cudaRuntimeGetVersion(&version) != cudaSuccess || version <= 0)
+        return "unknown";
+    const int major = version / 1000;
+    const int minor = (version % 1000) / 10;
+    return std::to_string(major) + "." + std::to_string(minor);
+}
+
+// 0 for dev iteration (fast builds), 3 for release (full tactic search).
+// 4-5 remain available through an explicit TrtBuildOptions::optimizationLevel.
+int resolveOptimizationLevel(const TrtBuildOptions& options)
+{
+    if (options.optimizationLevel >= 0)
+        return std::min(5, options.optimizationLevel);
+#ifdef NDEBUG
+    return 3;
+#else
+    return 0;
+#endif
+}
+
+bool saveTimingCache(nvinfer1::ITimingCache* cache, const std::string& timingPath)
+{
+    if (!cache) return false;
+    std::unique_ptr<nvinfer1::IHostMemory> blob(cache->serialize());
+    if (!blob || !blob->data() || blob->size() == 0) return false;
+    std::ofstream output(std::filesystem::u8path(timingPath), std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output.write(static_cast<const char*>(blob->data()), static_cast<std::streamsize>(blob->size()));
+    return static_cast<bool>(output);
+}
+} // namespace
+
+std::string trtTimingCachePath(const std::string& engineCachePath)
+{
+    return engineCachePath + ".timing";
+}
+
 std::string trtEngineCachePath(const std::string& onnxFile, const TrtBuildOptions& options)
 {
+    // Versioned identity: TRT + CUDA + compute capability + shapes + flags +
+    // optimization level + onnx content sample. Any toolchain/model change
+    // yields a different cache file instead of a stale deserialize failure.
     std::ostringstream identity;
     identity << NV_TENSORRT_MAJOR << '.' << NV_TENSORRT_MINOR << '.' << NV_TENSORRT_PATCH
+        << "|cuda" << cudaRuntimeVersionString()
         << '|' << options.fixedInputSize << '|' << options.enableFp16 << '|' << options.enableFp8
-        << '|' << options.minProfileSize << '|' << options.optProfileSize << '|' << options.maxProfileSize;
+        << '|' << options.minProfileSize << '|' << options.optProfileSize << '|' << options.maxProfileSize
+        << "|opt" << resolveOptimizationLevel(options);
     if(options.fixedInputSize)identity << '|' << options.inputWidth << 'x' << options.inputHeight;
     std::error_code error;
     const std::filesystem::path path=std::filesystem::u8path(onnxFile);
     const auto modified=std::filesystem::last_write_time(path,error);
     if(!error)identity << '|' << modified.time_since_epoch().count();
-    error.clear();
-    const auto bytes=std::filesystem::file_size(path,error);
-    if(!error)identity << '|' << bytes;
-    int device=0;cudaDeviceProp properties{};
-    if(cudaGetDevice(&device)==cudaSuccess&&cudaGetDeviceProperties(&properties,device)==cudaSuccess)
-        identity << '|' << properties.name << '|' << properties.major << '.' << properties.minor;
     std::uint64_t hash=14695981039346656037ull;
     for(const unsigned char value:identity.str()){hash^=value;hash*=1099511628211ull;}
+    hash=sampleOnnxHash(path,hash);
+    int device=0;cudaDeviceProp properties{};
+    if(cudaGetDevice(&device)==cudaSuccess&&cudaGetDeviceProperties(&properties,device)==cudaSuccess)
+    {
+        for(const char* p=properties.name;*p;++p){hash^=static_cast<unsigned char>(*p);hash*=1099511628211ull;}
+        hash^=static_cast<unsigned char>(properties.major);hash*=1099511628211ull;
+        hash^=static_cast<unsigned char>(properties.minor);hash*=1099511628211ull;
+    }
     std::ostringstream suffix;suffix << ".nodes-" << std::hex << hash << ".engine";
     return (path.parent_path()/(path.stem().string()+suffix.str())).string();
 }
@@ -145,6 +223,30 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile,nvinfer1:
     ImGuiProgressMonitor progressMonitor;
     std::unique_ptr<nvinfer1::IBuilderConfig> settings(builder->createBuilderConfig());
     if(!settings)throw std::runtime_error("TensorRT build configuration creation failed.");
+    settings->setBuilderOptimizationLevel(resolveOptimizationLevel(options));
+    // Persistent tactic timing cache: reuses kernel timings across rebuilds
+    // of the same versioned engine instead of re-profiling every export.
+    const std::string timingPath=trtTimingCachePath(trtEngineCachePath(onnxFile,options));
+    std::unique_ptr<nvinfer1::ITimingCache> timingCache;
+    {
+        std::ifstream timingFile(std::filesystem::u8path(timingPath),std::ios::binary);
+        if(timingFile.good())
+        {
+            timingFile.seekg(0,std::ios::end);
+            if(const auto length=timingFile.tellg();length>0)
+            {
+                const size_t size=static_cast<size_t>(length);
+                timingFile.seekg(0,std::ios::beg);
+                std::vector<char> blob(size);
+                if(timingFile.read(blob.data(),static_cast<std::streamsize>(size)))
+                    timingCache.reset(builder->createTimingCache(blob.data(),size));
+            }
+        }
+        if(!timingCache)
+            timingCache.reset(builder->createTimingCache(nullptr,0));
+        if(timingCache)
+            settings->setTimingCache(*timingCache,false);
+    }
     std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network,logger));
     if(!parser)throw std::runtime_error("ONNX parser creation failed.");
     settings->setProgressMonitor(&progressMonitor);
@@ -197,6 +299,8 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile,nvinfer1:
     if(!plan)throw std::runtime_error("TensorRT engine build failed or was cancelled.");
     auto* engine=runtime.deserializeCudaEngine(plan->data(),plan->size());
     if(!engine)throw std::runtime_error("TensorRT could not deserialize the built engine.");
+    if(timingCache&&saveTimingCache(timingCache.get(),timingPath))
+        std::cout << "[TensorRT] Timing cache saved: " << timingPath << std::endl;
     return engine;
 }
 #endif

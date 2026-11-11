@@ -14,12 +14,40 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(AIMBOT_USE_CUDA "Enable CUDA backend (USE_CUDA)" OFF)
 option(AIMBOT_COPY_RUNTIME_DLLS "Copy required runtime DLLs next to ai.exe after build" ON)
+option(AIMBOT_TRACY "Enable Tracy profiling (FetchContent wolfpld/tracy, OFF by default)" OFF)
+option(AIMBOT_ENABLE_AVX2 "Enable AVX2 fast path for NMS post-processing" ON)
+option(AIMBOT_USE_SCCACHE "Use sccache compiler launcher when available" OFF)
+
+if(AIMBOT_USE_SCCACHE)
+    find_program(AIMBOT_SCCACHE_PROGRAM sccache)
+    if(AIMBOT_SCCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        if(AIMBOT_USE_CUDA)
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        endif()
+        message(STATUS "Using sccache: ${AIMBOT_SCCACHE_PROGRAM}")
+    else()
+        message(STATUS "AIMBOT_USE_SCCACHE=ON but sccache was not found; building without launcher")
+    endif()
+endif()
+
+if(AIMBOT_TRACY)
+    include(FetchContent)
+    FetchContent_Declare(
+        tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.11
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(tracy)
+endif()
 
 if(AIMBOT_USE_CUDA)
     unset(AIMBOT_PACKAGES_DIR CACHE)
@@ -395,6 +423,26 @@ if(MSVC)
     )
 endif()
 
+if(AIMBOT_TRACY)
+    target_link_libraries(ai PRIVATE Tracy::TracyClient)
+    target_compile_definitions(ai PRIVATE TRACY_ENABLE TRACY_ON_DEMAND AIMBOT_HAS_TRACY)
+endif()
+
+if(AIMBOT_ENABLE_AVX2)
+    target_compile_definitions(ai PRIVATE AIMBOT_HAVE_AVX2)
+    if(MSVC)
+        set_source_files_properties(
+            "${SRC_DIR}/detector/postProcess.cpp"
+            PROPERTIES COMPILE_OPTIONS "/arch:AVX2"
+        )
+    else()
+        set_source_files_properties(
+            "${SRC_DIR}/detector/postProcess.cpp"
+            PROPERTIES COMPILE_OPTIONS "-mavx2"
+        )
+    endif()
+endif()
+
 if(AIMBOT_USE_CUDA)
     target_compile_definitions(ai PRIVATE USE_CUDA)
     target_include_directories(ai PRIVATE
@@ -624,6 +672,37 @@ if(BUILD_TESTING)
         target_compile_options(node_config_bridge_tests PRIVATE /W3 /permissive- /EHsc)
     endif()
     add_test(NAME node_config_migration COMMAND node_config_bridge_tests)
+    add_executable(postprocess_golden_tests
+        "${CMAKE_SOURCE_DIR}/tests/unit/postprocess_golden_tests.cpp"
+        "${SRC_DIR}/detector/postProcess.cpp")
+    target_include_directories(postprocess_golden_tests PRIVATE
+        "${SRC_DIR}"
+        "${AIMBOT_OPENCV_INCLUDE_DIR}")
+    target_compile_definitions(postprocess_golden_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
+    if(AIMBOT_ENABLE_AVX2)
+        target_compile_definitions(postprocess_golden_tests PRIVATE AIMBOT_HAVE_AVX2)
+    endif()
+    target_link_libraries(postprocess_golden_tests PRIVATE "${AIMBOT_OPENCV_LIBRARY}")
+    if(MSVC)
+        set_target_properties(postprocess_golden_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(postprocess_golden_tests PRIVATE /W3 /permissive- /EHsc)
+    endif()
+    # Same staging rule as the other OpenCV-linked tests: let ai copy the
+    # runtime DLLs first instead of racing it.
+    add_dependencies(postprocess_golden_tests ai)
+    add_test(NAME postprocess_golden_regressions COMMAND postprocess_golden_tests)
+    set_tests_properties(postprocess_golden_regressions PROPERTIES TIMEOUT 120)
+    add_executable(config_migrate_tests
+        "${CMAKE_SOURCE_DIR}/tests/unit/config_migrate_tests.cpp"
+        "${SRC_DIR}/nodes/node_graph.cpp"
+        "${SRC_DIR}/nodes/node_config_bridge.cpp"
+        "${SRC_DIR}/keyboard/keycodes.cpp")
+    target_include_directories(config_migrate_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config")
+    if(MSVC)
+        set_target_properties(config_migrate_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(config_migrate_tests PRIVATE /W3 /permissive- /EHsc)
+    endif()
+    add_test(NAME config_migrate_regressions COMMAND config_migrate_tests)
     add_executable(vision_outputs_tests
         "${CMAKE_SOURCE_DIR}/tests/vision_outputs_tests.cpp"
         "${SRC_DIR}/nodes/preview_image.cpp"

@@ -25,6 +25,7 @@
 
 #include "trt_detector.h"
 #include "nvinf.h"
+#include "aimbot_tracy.h"
 #include "tensorrt/trt_monitor.h"
 #include "sunone_aimbot_2.h"
 #include "other_tools.h"
@@ -65,6 +66,10 @@ TrtBuildOptions buildOptions(const NodeGraph::Node& node,int width,int height)
     options.minProfileSize=static_cast<int>(NodeGraph::parameter(node,"trt_profile_min_size"));
     options.optProfileSize=static_cast<int>(NodeGraph::parameter(node,"trt_profile_opt_size"));
     options.maxProfileSize=static_cast<int>(NodeGraph::parameter(node,"trt_profile_max_size"));
+    // Optional explicit override; absent key keeps auto (0 dev / 3 release).
+    // parameter() would return 0 for a missing key, so probe the map directly.
+    if(const auto explicitLevel=node.parameters.find("trt_opt_level");explicitLevel!=node.parameters.end())
+        options.optimizationLevel=static_cast<int>(explicitLevel->second);
     return options;
 }
 
@@ -598,6 +603,7 @@ std::vector<Detection> TrtDetector::detect(const NodeGraph::FrameStream& frame,c
 
 std::vector<Detection> TrtDetector::inferGraphFrame(const cv::Mat& cpu,const cv::cuda::GpuMat& gpu,const NodeGraph::Node& settings)
 {
+    AIMBOT_ZONE;
     std::vector<Detection> detections;
     if(!isInitialized()||(cpu.empty()&&gpu.empty()))return detections;
     inferenceSettings=settings;
@@ -673,7 +679,8 @@ void TrtDetector::inferenceThread()
                 std::to_string(NodeGraph::parameter(settings,"use_cuda_graph"))+"|"+std::to_string(NodeGraph::parameter(settings,"use_pinned_memory"))+"|"+
                 std::to_string(NodeGraph::parameter(settings,"export_enable_fp16"))+"|"+std::to_string(NodeGraph::parameter(settings,"export_enable_fp8"))+"|"+
                 std::to_string(NodeGraph::parameter(settings,"trt_profile_min_size"))+"|"+std::to_string(NodeGraph::parameter(settings,"trt_profile_opt_size"))+"|"+
-                std::to_string(NodeGraph::parameter(settings,"trt_profile_max_size"));
+                std::to_string(NodeGraph::parameter(settings,"trt_profile_max_size"))+"|"+
+                std::to_string(buildOptions(settings,packet->width,packet->height).optimizationLevel);
             auto& slot=models[nodeKey];const auto now=std::chrono::steady_clock::now();
             if(slot.fingerprint!=fingerprint||!slot.detector||!slot.detector->isInitialized())
             {

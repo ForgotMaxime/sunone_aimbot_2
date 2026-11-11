@@ -11,7 +11,7 @@ class MouseThread;
 class Game_overlay;
 
 extern Game_overlay* gameOverlayPtr;
-extern std::thread gameOverlayThread;
+extern std::jthread gameOverlayThread;
 extern std::atomic<bool> gameOverlayShouldExit;
 
 extern std::mutex g_trackerDebugMutex;
