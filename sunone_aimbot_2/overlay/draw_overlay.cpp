@@ -56,6 +56,46 @@ void draw_overlay()
             OverlayUI::EndSettingRow(row);
         }
 
+        {
+            const auto row = OverlayUI::BeginSettingRow("Editor VSync");
+            if (ImGui::Checkbox("##overlay_vsync", &config.overlay_vsync))
+                OverlayConfig_MarkDirty();
+            OverlayUI::EndSettingRow(row);
+        }
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("VSync caps the editor at the display rate. Off (default) keeps the lowest input latency.");
+        ImGui::PopTextWrapPos();
+
+        OverlayUI::EndSection();
+    }
+
+    if (OverlayUI::BeginSection("Game Overlay", "overlay_section_game"))
+    {
+        {
+            const auto row = OverlayUI::BeginSettingRow("In-Game Overlay");
+            if (ImGui::Checkbox("##game_overlay_enabled", &config.game_overlay_enabled))
+                OverlayConfig_MarkDirty();
+            OverlayUI::EndSettingRow(row);
+        }
+        {
+            int maxFps = std::clamp(config.game_overlay_max_fps, 0, 1000);
+            if (maxFps != config.game_overlay_max_fps)
+            {
+                config.game_overlay_max_fps = maxFps;
+                OverlayConfig_MarkDirty();
+            }
+            const auto row = OverlayUI::BeginSettingRow("Game Overlay Max FPS (0 = uncapped)");
+            if (ImGui::SliderInt("##game_overlay_max_fps", &maxFps, 0, 240))
+            {
+                config.game_overlay_max_fps = std::clamp(maxFps, 0, 1000);
+                OverlayConfig_MarkDirty();
+            }
+            OverlayUI::EndSettingRow(row);
+        }
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Box colors, thickness and FOV ring are edited in the graph OverlayOutput node.");
+        ImGui::PopTextWrapPos();
+
         OverlayUI::EndSection();
     }
 }
