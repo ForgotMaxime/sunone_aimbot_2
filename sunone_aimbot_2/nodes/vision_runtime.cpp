@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <unordered_map>
 
@@ -93,6 +94,69 @@ std::string resolveModelPath(const NodeGraph::Node& node)
 }
 void reportError(int nodeKey,const std::string& error){errors[nodeKey]=error;}
 std::string nodeError(int nodeKey){const auto found=errors.find(nodeKey);return found==errors.end()?std::string{}:found->second;}
+
+NodeGraph::Node sanitizeInferenceNode(const NodeGraph::Node& node, std::string* warning)
+{
+    NodeGraph::Node locked = node;
+    std::string notes;
+    auto force = [&](const char* key, double value)
+    {
+        const auto it = locked.parameters.find(key);
+        const double before = (it == locked.parameters.end()) ? 0.0 : it->second;
+        if (before != value)
+        {
+            locked.parameters[key] = value;
+            if (!notes.empty())
+                notes += ", ";
+            notes += std::string(key) + " " + std::to_string(before) + "->" + std::to_string(value);
+        }
+    };
+    // P0: latency-optimal static path. CUDA graphs require pinned host
+    // outputs; FP16 halves bandwidth; static batch=1 keeps shapes fixed.
+    force("fixed_input_size", 1);
+    force("use_cuda_graph", 1);
+    force("use_pinned_memory", 1);
+    force("export_enable_fp16", 1);
+    force("export_enable_fp8", 0);
+    if (warning)
+        *warning = notes;
+    return locked;
+}
+
+bool validateStaticFp16Batch1(const NodeGraph::Node& node, std::string* error)
+{
+    auto check = [&](const char* key, double expected, std::string& why) -> bool
+    {
+        const auto it = node.parameters.find(key);
+        const double actual = (it == node.parameters.end()) ? 0.0 : it->second;
+        if (actual != expected)
+        {
+            why = std::string(key) + " must be " + std::to_string(static_cast<int>(expected)) +
+                " (static FP16 batch=1 latency path), got " + std::to_string(actual);
+            return false;
+        }
+        return true;
+    };
+    std::string why;
+    if (!check("fixed_input_size", 1, why) ||
+        !check("use_cuda_graph", 1, why) ||
+        !check("use_pinned_memory", 1, why) ||
+        !check("export_enable_fp16", 1, why) ||
+        !check("export_enable_fp8", 0, why))
+    {
+        if (error)
+            *error = why;
+        return false;
+    }
+    if (error)
+        error->clear();
+    return true;
+}
+
+bool shouldSkipStaleCapture(std::uint32_t accumulatedFrames, bool hasLastPresentTime)
+{
+    return accumulatedFrames == 0u && !hasLastPresentTime;
+}
 
 bool syncCaptureConfiguration(bool force)
 {
@@ -206,7 +270,13 @@ NodeGraph::Actions processFrame(const NodeGraph::FrameStream& frame,const Infer&
         return NodeGraph::parameter(node,"enabled")!=0?frame:NodeGraph::FrameStream{};
     };
     context.infer=[&](int key,const NodeGraph::FrameStream& input,const NodeGraph::Node& node){
-        try{return infer(key,input,node);}
+        try
+        {
+            // P0: lock the static FP16 batch=1 + CUDA graph path before
+            // dispatching to the backend, without touching detector code.
+            const NodeGraph::Node locked = sanitizeInferenceNode(node);
+            return infer(key,input,locked);
+        }
         catch(const std::exception& error){reportError(key,error.what());return NodeGraph::DetectionStream{};}
     };
     context.depth=inferDepth;context.depthToMask=depthToMask;context.applyMask=applyMask;

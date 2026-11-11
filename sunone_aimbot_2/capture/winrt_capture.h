@@ -2,6 +2,8 @@
 #define WINRT_CAPTURE_H
 
 #include <opencv2/opencv.hpp>
+#include <atomic>
+#include <cstdint>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <mutex>
@@ -52,6 +54,40 @@ private:
     winrt::com_ptr<ID3D11Texture2D> sharedTexture;
 
     winrt::com_ptr<ID3D11Texture2D> stagingTextureCPU;
+    // P0 capture-latency prep: second staging slot for double-buffered
+    // readback (registered once at init). WinRT keeps using stagingTextureCPU
+    // until winrt_capture.cpp is wired to ping-pong; no behavior change here.
+    winrt::com_ptr<ID3D11Texture2D> stagingTextureCPUAlt;
+    bool stagingFlip = false;
+
+    // P0: QPC timestamp of the last acquired frame, for staged e2e latency
+    // (Acquire -> preprocess end -> infer end -> post end -> SendInput).
+    // Written by the capture thread, read by telemetry/bench.
+    std::atomic<std::uint64_t> lastAcquireQpc{0};
+
+    static std::uint64_t QpcNow()
+    {
+        LARGE_INTEGER counter{};
+        ::QueryPerformanceCounter(&counter);
+        return static_cast<std::uint64_t>(counter.QuadPart);
+    }
+
+    static double QpcToMillis(std::uint64_t begin, std::uint64_t end)
+    {
+        LARGE_INTEGER frequency{};
+        ::QueryPerformanceFrequency(&frequency);
+        if (frequency.QuadPart <= 0 || end < begin)
+            return 0.0;
+        return (static_cast<double>(end - begin) * 1000.0) / static_cast<double>(frequency.QuadPart);
+    }
+
+    ID3D11Texture2D* nextStagingForReadback()
+    {
+        if (!stagingTextureCPUAlt)
+            return stagingTextureCPU.get();
+        stagingFlip = !stagingFlip;
+        return stagingFlip ? stagingTextureCPUAlt.get() : stagingTextureCPU.get();
+    }
 
     bool useCuda = false;
 
