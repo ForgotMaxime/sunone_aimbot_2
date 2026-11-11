@@ -1,0 +1,14 @@
+{
+  "name": "sunone-aimbot-2",
+  "version": "0.1.0",
+  "description": "Manifest for optional/vendored deps. NOTE: the default build still resolves OpenCV, ONNX Runtime DirectML and DirectML through NuGet/modules (see tools/*.ps1); this manifest mirrors the same set for preset/CI use and adds test + profiling deps.",
+  "dependencies": [
+    "opencv",
+    {
+      "name": "onnxruntime",
+      "$comment": "Future mirror of the NuGet Microsoft.ML.OnnxRuntime.DirectML package (DirectML EP). The default DML build keeps using NuGet; no vcpkg toolchain is forced by the presets."
+    },
+    "tracy",
+    "catch2"
+  ]
+}

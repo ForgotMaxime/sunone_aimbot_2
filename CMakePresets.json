@@ -1,0 +1,77 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "AIMBOT_USE_SCCACHE": "ON",
+        "AIMBOT_COPY_RUNTIME_DLLS": "ON"
+      }
+    },
+    {
+      "name": "cuda-release",
+      "displayName": "CUDA/TensorRT Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "AIMBOT_USE_CUDA": "ON",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "dml-release",
+      "displayName": "DirectML Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "AIMBOT_USE_CUDA": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI (windows-2022, DML, tests)",
+      "inherits": "base",
+      "cacheVariables": {
+        "AIMBOT_USE_CUDA": "OFF",
+        "BUILD_TESTING": "ON",
+        "AIMBOT_USE_SCCACHE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "dml-release",
+      "configurePreset": "dml-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Release",
+      "outputOnFailure": true,
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 120
+      }
+    }
+  ]
+}

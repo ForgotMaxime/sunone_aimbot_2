@@ -10,6 +10,7 @@ param(
     [switch]$UseLatestPackages,
     [switch]$NonInteractive,
     [switch]$DryRun,
+    [string]$Preset = "",
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraCMakeArgs
 )
@@ -28,6 +29,17 @@ try {
     $repo = Get-RepoRoot
     Push-Location $repo
     $pushedLocation = $true
+
+    # Thin preset delegation: `tools/build_dml.ps1 -Preset dml-release`
+    # configures and builds through CMakePresets.json instead of the manual flow below.
+    if (-not [string]::IsNullOrWhiteSpace($Preset)) {
+        Import-VisualStudioEnvironment
+        $null = Ensure-Ninja -AllowDownload:$true -DryRun:$DryRun
+        Invoke-External "cmake" @("--preset", $Preset) -DryRun:$DryRun
+        Invoke-External "cmake" @("--build", "--preset", $Preset) -DryRun:$DryRun
+        Write-BuildStep "Done (preset $Preset)" "dml"
+        return
+    }
 
     $allowDownloads = Resolve-OptionalBoolean -Value $DownloadOrUpdateNeeded -Question "Download or update needed files?" -Default $true -NonInteractive:$NonInteractive
 

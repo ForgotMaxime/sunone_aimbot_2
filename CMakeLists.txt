@@ -14,12 +14,40 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(AIMBOT_USE_CUDA "Enable CUDA backend (USE_CUDA)" OFF)
 option(AIMBOT_COPY_RUNTIME_DLLS "Copy required runtime DLLs next to ai.exe after build" ON)
+option(AIMBOT_TRACY "Enable Tracy profiling (FetchContent wolfpld/tracy, OFF by default)" OFF)
+option(AIMBOT_ENABLE_AVX2 "Enable AVX2 fast path for NMS post-processing" ON)
+option(AIMBOT_USE_SCCACHE "Use sccache compiler launcher when available" OFF)
+
+if(AIMBOT_USE_SCCACHE)
+    find_program(AIMBOT_SCCACHE_PROGRAM sccache)
+    if(AIMBOT_SCCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        if(AIMBOT_USE_CUDA)
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${AIMBOT_SCCACHE_PROGRAM}")
+        endif()
+        message(STATUS "Using sccache: ${AIMBOT_SCCACHE_PROGRAM}")
+    else()
+        message(STATUS "AIMBOT_USE_SCCACHE=ON but sccache was not found; building without launcher")
+    endif()
+endif()
+
+if(AIMBOT_TRACY)
+    include(FetchContent)
+    FetchContent_Declare(
+        tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.11
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(tracy)
+endif()
 
 if(AIMBOT_USE_CUDA)
     unset(AIMBOT_PACKAGES_DIR CACHE)
@@ -393,6 +421,26 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
     )
+endif()
+
+if(AIMBOT_TRACY)
+    target_link_libraries(ai PRIVATE Tracy::TracyClient)
+    target_compile_definitions(ai PRIVATE TRACY_ENABLE TRACY_ON_DEMAND AIMBOT_HAS_TRACY)
+endif()
+
+if(AIMBOT_ENABLE_AVX2)
+    target_compile_definitions(ai PRIVATE AIMBOT_HAVE_AVX2)
+    if(MSVC)
+        set_source_files_properties(
+            "${SRC_DIR}/detector/postProcess.cpp"
+            PROPERTIES COMPILE_OPTIONS "/arch:AVX2"
+        )
+    else()
+        set_source_files_properties(
+            "${SRC_DIR}/detector/postProcess.cpp"
+            PROPERTIES COMPILE_OPTIONS "-mavx2"
+        )
+    endif()
 endif()
 
 if(AIMBOT_USE_CUDA)
