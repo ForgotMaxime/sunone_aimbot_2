@@ -165,7 +165,7 @@ void draw_debug()
     {
         if(!config.circle_fov_enabled)ImGui::TextDisabled("Circle FOV is off (circle_fov_enabled=false).");
         else ImGui::Text("Circle FOV radius: %d%% of the capture area",config.circle_fov_radius_percent);
-        const float size=std::min(ImGui::GetContentRegionAvail().x,220.0f);
+        const float size=std::clamp(std::min(ImGui::GetContentRegionAvail().x,220.0f),40.0f,220.0f);
         ImGui::InvisibleButton("##fov_canvas",ImVec2(size,size));
         ImDrawList* preview=ImGui::GetWindowDrawList();
         const ImVec2 min=ImGui::GetItemRectMin(),max=ImGui::GetItemRectMax();
