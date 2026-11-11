@@ -248,36 +248,98 @@ void MultiTargetTracker::pruneDeadTracks()
 
 int MultiTargetTracker::chooseBestTrack(int screenWidth, int screenHeight) const
 {
+    TargetSelectionSettings legacy;
+    legacy.stickinessEnabled = false;
+    return chooseBestTrack(screenWidth, screenHeight, legacy);
+}
+
+int MultiTargetTracker::chooseBestTrack(int screenWidth, int screenHeight,
+    const TargetSelectionSettings& settings) const
+{
     if (tracks_.empty())
         return -1;
 
     const double cx = screenWidth * 0.5;
     const double cy = screenHeight * 0.5;
 
-    int bestIdx = -1;
-    double bestScore = std::numeric_limits<double>::max();
-
+    struct Scored { int idx; double score; double dist; };
+    std::vector<Scored> scored;
+    scored.reserve(tracks_.size());
     for (size_t i = 0; i < tracks_.size(); ++i)
     {
         const auto& t = tracks_[i];
         if (t.missed > allowedMissedFrames(t))
             continue;
-
         const double dx = t.pivotX - cx;
         const double dy = t.pivotY - cy;
         const double dist = std::hypot(dx, dy);
         const double hitBonus = std::min(5, t.hits) * 4.0;
         const double missPenalty = t.missed * 50.0;
-        const double score = dist + missPenalty - hitBonus;
+        scored.push_back({ static_cast<int>(i), dist + missPenalty - hitBonus, dist });
+    }
+    if (scored.empty())
+        return -1;
 
-        if (score < bestScore)
-        {
-            bestScore = score;
-            bestIdx = static_cast<int>(i);
-        }
+    auto bestIt = std::min_element(scored.begin(), scored.end(),
+        [](const Scored& a, const Scored& b) { return a.score < b.score; });
+    if (!settings.stickinessEnabled)
+    {
+        pendingSwitchId_ = -1;
+        pendingSwitchFrames_ = 0;
+        return bestIt->idx;
     }
 
-    return bestIdx;
+    // Stickiness: keep the locked track unless a challenger beats it by a
+    // hysteresis margin for holdFrames consecutive updates and the cooldown
+    // since the last switch has elapsed.
+    const int lockedIdx = findTrackIndexById(lockedTrackId_);
+    const auto now = std::chrono::steady_clock::now();
+    const double cooldownMs = std::max(0.0, settings.switchCooldownMs);
+    const double marginPx = std::max(0.0, settings.stickinessMarginPx);
+    const int holdFrames = std::max(1, settings.stickinessHoldFrames);
+    auto lockedIt = scored.end();
+    if (lockedIdx >= 0)
+        for (auto it = scored.begin(); it != scored.end(); ++it)
+            if (it->idx == lockedIdx) { lockedIt = it; break; }
+    if (lockedIt == scored.end())
+    {
+        // Locked track gone: take the best immediately (kill path handled by
+        // caller delays), reset hysteresis.
+        pendingSwitchId_ = -1;
+        pendingSwitchFrames_ = 0;
+        lastSwitchTime_ = now;
+        return bestIt->idx;
+    }
+    if (bestIt->idx == lockedIt->idx)
+    {
+        pendingSwitchId_ = -1;
+        pendingSwitchFrames_ = 0;
+        return lockedIt->idx;
+    }
+    const double improvement = lockedIt->dist - bestIt->dist;
+    if (improvement < marginPx)
+    {
+        pendingSwitchId_ = -1;
+        pendingSwitchFrames_ = 0;
+        return lockedIt->idx;
+    }
+    const double elapsedMs = lastSwitchTime_.time_since_epoch().count() == 0 ? 1e9 :
+        std::chrono::duration<double, std::milli>(now - lastSwitchTime_).count();
+    if (elapsedMs < cooldownMs)
+        return lockedIt->idx;
+    const int challengerId = tracks_[bestIt->idx].id;
+    if (challengerId != pendingSwitchId_)
+    {
+        pendingSwitchId_ = challengerId;
+        pendingSwitchFrames_ = 1;
+        return lockedIt->idx;
+    }
+    if (++pendingSwitchFrames_ < holdFrames)
+        return lockedIt->idx;
+    pendingSwitchId_ = -1;
+    pendingSwitchFrames_ = 0;
+    lastSwitchTime_ = now;
+    return bestIt->idx;
 }
 
 void MultiTargetTracker::reset()
@@ -287,6 +349,9 @@ void MultiTargetTracker::reset()
     lockedTrackId_ = -1;
     frameDtMeanSec_ = 1.0 / 60.0;
     lastTrackerFrameTime_ = {};
+    pendingSwitchId_ = -1;
+    pendingSwitchFrames_ = 0;
+    lastSwitchTime_ = {};
 }
 
 void MultiTargetTracker::update(
@@ -637,15 +702,17 @@ void MultiTargetTracker::update(
 
     if (!keepCurrentLock)
     {
-        const int bestIdx = chooseBestTrack(screenWidth, screenHeight);
+        const int bestIdx = chooseBestTrack(screenWidth, screenHeight, settings);
         lockedTrackId_ = (bestIdx >= 0) ? tracks_[bestIdx].id : -1;
+        if (lockedTrackId_ != -1) lastSwitchTime_ = std::chrono::steady_clock::now();
         return;
     }
 
     if (lockedTrackId_ == -1)
     {
-        const int bestIdx = chooseBestTrack(screenWidth, screenHeight);
+        const int bestIdx = chooseBestTrack(screenWidth, screenHeight, settings);
         lockedTrackId_ = (bestIdx >= 0) ? tracks_[bestIdx].id : -1;
+        if (lockedTrackId_ != -1) lastSwitchTime_ = std::chrono::steady_clock::now();
     }
 }
 
