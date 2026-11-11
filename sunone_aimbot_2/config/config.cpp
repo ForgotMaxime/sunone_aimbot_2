@@ -112,6 +112,46 @@ bool Config::loadConfig(const std::string& filename)
         wind_M = 10.0f;
         wind_D = 8.0f;
 
+        // Humanizer (all OFF by default: legacy behavior preserved).
+        humanizer_enabled = false;
+        humanizer_deadzone_px = 0.0f;
+        humanizer_target_delay_ms = 0.0f;
+        humanizer_switch_delay_ms = 0.0f;
+        humanizer_kill_delay_ms = 0.0f;
+        humanizer_vischeck_delay_ms = 0.0f;
+        humanizer_aim_delay_ms = 0.0f;
+        humanizer_delay_jitter_ms = 0.0f;
+        humanizer_stickiness_enabled = false;
+        humanizer_stickiness_margin_px = 25.0f;
+        humanizer_stickiness_hold_frames = 3;
+        humanizer_switch_cooldown_ms = 120.0f;
+        humanizer_overshoot_enabled = false;
+        humanizer_overshoot_min_px = 3.0f;
+        humanizer_overshoot_max_px = 8.0f;
+        humanizer_overshoot_dist_px = 16.0f;
+        humanizer_overshoot_return_t = 0.85f;
+        humanizer_oneeuro_enabled = false;
+        humanizer_oneeuro_fcmin = 1.0f;
+        humanizer_oneeuro_beta = 0.05f;
+        humanizer_oneeuro_dcutoff = 1.0f;
+        humanizer_fitts_enabled = false;
+        humanizer_fitts_a = 0.01f;
+        humanizer_fitts_b = 0.03f;
+        humanizer_fitts_W = 24.0f;
+        humanizer_jerk_enabled = false;
+        humanizer_noise_mode = 0;
+        humanizer_noise_theta = 2.5f;
+        humanizer_noise_sigma = 1.0f;
+        humanizer_noise_signal_gain = 0.0f;
+        humanizer_lead_adaptive = false;
+        humanizer_lead_gain = 0.0004f;
+        humanizer_lead_max_scale = 1.6f;
+        humanizer_coast_enabled = false;
+        humanizer_coast_frames = 6;
+        humanizer_coast_decay = 0.90f;
+        humanizer_recoil_pattern_enabled = false;
+        humanizer_recoil_pattern_jitter = 0.0f;
+
         // Arduino
         arduino_baudrate = 115200;
         arduino_port = "COM0";
@@ -437,6 +477,46 @@ bool Config::loadConfig(const std::string& filename)
     wind_M = (float)get_double("wind_M", 10.0f);
     wind_D = (float)get_double("wind_D", 8.0f);
 
+    // Humanizer (ajout cles seulement, defauts conservateurs OFF/0).
+    humanizer_enabled = get_bool("humanizer_enabled", false);
+    humanizer_deadzone_px = (float)get_double("humanizer_deadzone_px", 0.0);
+    humanizer_target_delay_ms = (float)get_double("humanizer_target_delay_ms", 0.0);
+    humanizer_switch_delay_ms = (float)get_double("humanizer_switch_delay_ms", 0.0);
+    humanizer_kill_delay_ms = (float)get_double("humanizer_kill_delay_ms", 0.0);
+    humanizer_vischeck_delay_ms = (float)get_double("humanizer_vischeck_delay_ms", 0.0);
+    humanizer_aim_delay_ms = (float)get_double("humanizer_aim_delay_ms", 0.0);
+    humanizer_delay_jitter_ms = (float)get_double("humanizer_delay_jitter_ms", 0.0);
+    humanizer_stickiness_enabled = get_bool("humanizer_stickiness_enabled", false);
+    humanizer_stickiness_margin_px = (float)get_double("humanizer_stickiness_margin_px", 25.0);
+    humanizer_stickiness_hold_frames = get_long("humanizer_stickiness_hold_frames", 3);
+    humanizer_switch_cooldown_ms = (float)get_double("humanizer_switch_cooldown_ms", 120.0);
+    humanizer_overshoot_enabled = get_bool("humanizer_overshoot_enabled", false);
+    humanizer_overshoot_min_px = (float)get_double("humanizer_overshoot_min_px", 3.0);
+    humanizer_overshoot_max_px = (float)get_double("humanizer_overshoot_max_px", 8.0);
+    humanizer_overshoot_dist_px = (float)get_double("humanizer_overshoot_dist_px", 16.0);
+    humanizer_overshoot_return_t = (float)get_double("humanizer_overshoot_return_t", 0.85);
+    humanizer_oneeuro_enabled = get_bool("humanizer_oneeuro_enabled", false);
+    humanizer_oneeuro_fcmin = (float)get_double("humanizer_oneeuro_fcmin", 1.0);
+    humanizer_oneeuro_beta = (float)get_double("humanizer_oneeuro_beta", 0.05);
+    humanizer_oneeuro_dcutoff = (float)get_double("humanizer_oneeuro_dcutoff", 1.0);
+    humanizer_fitts_enabled = get_bool("humanizer_fitts_enabled", false);
+    humanizer_fitts_a = (float)get_double("humanizer_fitts_a", 0.05);
+    humanizer_fitts_b = (float)get_double("humanizer_fitts_b", 0.12);
+    humanizer_fitts_W = (float)get_double("humanizer_fitts_W", 24.0);
+    humanizer_jerk_enabled = get_bool("humanizer_jerk_enabled", false);
+    humanizer_noise_mode = get_long("humanizer_noise_mode", 0);
+    humanizer_noise_theta = (float)get_double("humanizer_noise_theta", 2.5);
+    humanizer_noise_sigma = (float)get_double("humanizer_noise_sigma", 1.0);
+    humanizer_noise_signal_gain = (float)get_double("humanizer_noise_signal_gain", 0.0);
+    humanizer_lead_adaptive = get_bool("humanizer_lead_adaptive", false);
+    humanizer_lead_gain = (float)get_double("humanizer_lead_gain", 0.0004);
+    humanizer_lead_max_scale = (float)get_double("humanizer_lead_max_scale", 1.6);
+    humanizer_coast_enabled = get_bool("humanizer_coast_enabled", false);
+    humanizer_coast_frames = get_long("humanizer_coast_frames", 6);
+    humanizer_coast_decay = (float)get_double("humanizer_coast_decay", 0.90);
+    humanizer_recoil_pattern_enabled = get_bool("humanizer_recoil_pattern_enabled", false);
+    humanizer_recoil_pattern_jitter = (float)get_double("humanizer_recoil_pattern_jitter", 0.0);
+
     // Arduino
     arduino_baudrate = get_long("arduino_baudrate", 115200);
     arduino_port = get_string("arduino_port", "COM0");
@@ -616,6 +696,63 @@ bool Config::loadConfig(const std::string& filename)
     if (kalman_reset_timeout_sec < 0.05f) kalman_reset_timeout_sec = 0.05f;
     if (kalman_reset_timeout_sec > 3.0f) kalman_reset_timeout_sec = 3.0f;
 
+    // Humanizer clamps (conservative ranges).
+    if (humanizer_deadzone_px < 0.0f) humanizer_deadzone_px = 0.0f;
+    if (humanizer_deadzone_px > 256.0f) humanizer_deadzone_px = 256.0f;
+    auto clampDelay = [](float& v) {
+        if (v < 0.0f) v = 0.0f;
+        if (v > 0.0f) { if (v < 30.0f) v = 30.0f; if (v > 120.0f) v = 120.0f; }
+    };
+    clampDelay(humanizer_target_delay_ms); clampDelay(humanizer_switch_delay_ms);
+    clampDelay(humanizer_kill_delay_ms); clampDelay(humanizer_vischeck_delay_ms);
+    clampDelay(humanizer_aim_delay_ms);
+    if (humanizer_delay_jitter_ms < 0.0f) humanizer_delay_jitter_ms = 0.0f;
+    if (humanizer_delay_jitter_ms > 90.0f) humanizer_delay_jitter_ms = 90.0f;
+    if (humanizer_stickiness_margin_px < 0.0f) humanizer_stickiness_margin_px = 0.0f;
+    if (humanizer_stickiness_margin_px > 256.0f) humanizer_stickiness_margin_px = 256.0f;
+    if (humanizer_stickiness_hold_frames < 1) humanizer_stickiness_hold_frames = 1;
+    if (humanizer_stickiness_hold_frames > 30) humanizer_stickiness_hold_frames = 30;
+    if (humanizer_switch_cooldown_ms < 0.0f) humanizer_switch_cooldown_ms = 0.0f;
+    if (humanizer_switch_cooldown_ms > 1000.0f) humanizer_switch_cooldown_ms = 1000.0f;
+    if (humanizer_overshoot_min_px < 0.0f) humanizer_overshoot_min_px = 0.0f;
+    if (humanizer_overshoot_min_px > 32.0f) humanizer_overshoot_min_px = 32.0f;
+    if (humanizer_overshoot_max_px < 0.0f) humanizer_overshoot_max_px = 0.0f;
+    if (humanizer_overshoot_max_px > 32.0f) humanizer_overshoot_max_px = 32.0f;
+    if (humanizer_overshoot_max_px < humanizer_overshoot_min_px) humanizer_overshoot_max_px = humanizer_overshoot_min_px;
+    if (humanizer_overshoot_dist_px < 0.0f) humanizer_overshoot_dist_px = 0.0f;
+    if (humanizer_overshoot_dist_px > 512.0f) humanizer_overshoot_dist_px = 512.0f;
+    if (humanizer_overshoot_return_t < 0.0f) humanizer_overshoot_return_t = 0.0f;
+    if (humanizer_overshoot_return_t > 1.0f) humanizer_overshoot_return_t = 1.0f;
+    if (humanizer_oneeuro_fcmin < 0.05f) humanizer_oneeuro_fcmin = 0.05f;
+    if (humanizer_oneeuro_fcmin > 20.0f) humanizer_oneeuro_fcmin = 20.0f;
+    if (humanizer_oneeuro_beta < 0.0f) humanizer_oneeuro_beta = 0.0f;
+    if (humanizer_oneeuro_beta > 5.0f) humanizer_oneeuro_beta = 5.0f;
+    if (humanizer_oneeuro_dcutoff < 0.05f) humanizer_oneeuro_dcutoff = 0.05f;
+    if (humanizer_oneeuro_dcutoff > 20.0f) humanizer_oneeuro_dcutoff = 20.0f;
+    if (humanizer_fitts_a < 0.0f) humanizer_fitts_a = 0.0f;
+    if (humanizer_fitts_a > 2.0f) humanizer_fitts_a = 2.0f;
+    if (humanizer_fitts_b < 0.0f) humanizer_fitts_b = 0.0f;
+    if (humanizer_fitts_b > 2.0f) humanizer_fitts_b = 2.0f;
+    if (humanizer_fitts_W < 1.0f) humanizer_fitts_W = 1.0f;
+    if (humanizer_fitts_W > 1024.0f) humanizer_fitts_W = 1024.0f;
+    if (humanizer_noise_mode < 0) humanizer_noise_mode = 0;
+    if (humanizer_noise_mode > 2) humanizer_noise_mode = 2;
+    if (humanizer_noise_theta < 0.01f) humanizer_noise_theta = 0.01f;
+    if (humanizer_noise_theta > 20.0f) humanizer_noise_theta = 20.0f;
+    if (humanizer_noise_sigma < 0.0f) humanizer_noise_sigma = 0.0f;
+    if (humanizer_noise_sigma > 8.0f) humanizer_noise_sigma = 8.0f;
+    if (humanizer_noise_signal_gain < 0.0f) humanizer_noise_signal_gain = 0.0f;
+    if (humanizer_noise_signal_gain > 4.0f) humanizer_noise_signal_gain = 4.0f;
+    if (humanizer_lead_gain < 0.0f) humanizer_lead_gain = 0.0f;
+    if (humanizer_lead_gain > 0.01f) humanizer_lead_gain = 0.01f;
+    if (humanizer_lead_max_scale < 1.0f) humanizer_lead_max_scale = 1.0f;
+    if (humanizer_lead_max_scale > 3.0f) humanizer_lead_max_scale = 3.0f;
+    if (humanizer_coast_frames < 0) humanizer_coast_frames = 0;
+    if (humanizer_coast_frames > 60) humanizer_coast_frames = 60;
+    if (humanizer_coast_decay < 0.5f) humanizer_coast_decay = 0.5f;
+    if (humanizer_coast_decay > 0.999f) humanizer_coast_decay = 0.999f;
+    if (humanizer_recoil_pattern_jitter < 0.0f) humanizer_recoil_pattern_jitter = 0.0f;
+
     if (overlay_width < 560) overlay_width = 560;
     if (overlay_width > 3840) overlay_width = 3840;
     if (overlay_height < 340) overlay_height = 340;
@@ -731,6 +868,47 @@ bool Config::saveConfig(const std::string& filename)
         << "wind_W = " << wind_W << "\n"
         << "wind_M = " << wind_M << "\n"
         << "wind_D = " << wind_D << "\n\n";
+
+    // Humanizer (opt-in, defaults OFF preserve legacy behavior)
+    file << "# Humanizer (legitimacy)\n"
+        << "humanizer_enabled = " << (humanizer_enabled ? "true" : "false") << "\n"
+        << "humanizer_deadzone_px = " << humanizer_deadzone_px << "\n"
+        << "humanizer_target_delay_ms = " << humanizer_target_delay_ms << "\n"
+        << "humanizer_switch_delay_ms = " << humanizer_switch_delay_ms << "\n"
+        << "humanizer_kill_delay_ms = " << humanizer_kill_delay_ms << "\n"
+        << "humanizer_vischeck_delay_ms = " << humanizer_vischeck_delay_ms << "\n"
+        << "humanizer_aim_delay_ms = " << humanizer_aim_delay_ms << "\n"
+        << "humanizer_delay_jitter_ms = " << humanizer_delay_jitter_ms << "\n"
+        << "humanizer_stickiness_enabled = " << (humanizer_stickiness_enabled ? "true" : "false") << "\n"
+        << "humanizer_stickiness_margin_px = " << humanizer_stickiness_margin_px << "\n"
+        << "humanizer_stickiness_hold_frames = " << humanizer_stickiness_hold_frames << "\n"
+        << "humanizer_switch_cooldown_ms = " << humanizer_switch_cooldown_ms << "\n"
+        << "humanizer_overshoot_enabled = " << (humanizer_overshoot_enabled ? "true" : "false") << "\n"
+        << "humanizer_overshoot_min_px = " << humanizer_overshoot_min_px << "\n"
+        << "humanizer_overshoot_max_px = " << humanizer_overshoot_max_px << "\n"
+        << "humanizer_overshoot_dist_px = " << humanizer_overshoot_dist_px << "\n"
+        << "humanizer_overshoot_return_t = " << humanizer_overshoot_return_t << "\n"
+        << "humanizer_oneeuro_enabled = " << (humanizer_oneeuro_enabled ? "true" : "false") << "\n"
+        << "humanizer_oneeuro_fcmin = " << humanizer_oneeuro_fcmin << "\n"
+        << "humanizer_oneeuro_beta = " << humanizer_oneeuro_beta << "\n"
+        << "humanizer_oneeuro_dcutoff = " << humanizer_oneeuro_dcutoff << "\n"
+        << "humanizer_fitts_enabled = " << (humanizer_fitts_enabled ? "true" : "false") << "\n"
+        << "humanizer_fitts_a = " << humanizer_fitts_a << "\n"
+        << "humanizer_fitts_b = " << humanizer_fitts_b << "\n"
+        << "humanizer_fitts_W = " << humanizer_fitts_W << "\n"
+        << "humanizer_jerk_enabled = " << (humanizer_jerk_enabled ? "true" : "false") << "\n"
+        << "humanizer_noise_mode = " << humanizer_noise_mode << "\n"
+        << "humanizer_noise_theta = " << humanizer_noise_theta << "\n"
+        << "humanizer_noise_sigma = " << humanizer_noise_sigma << "\n"
+        << "humanizer_noise_signal_gain = " << humanizer_noise_signal_gain << "\n"
+        << "humanizer_lead_adaptive = " << (humanizer_lead_adaptive ? "true" : "false") << "\n"
+        << "humanizer_lead_gain = " << humanizer_lead_gain << "\n"
+        << "humanizer_lead_max_scale = " << humanizer_lead_max_scale << "\n"
+        << "humanizer_coast_enabled = " << (humanizer_coast_enabled ? "true" : "false") << "\n"
+        << "humanizer_coast_frames = " << humanizer_coast_frames << "\n"
+        << "humanizer_coast_decay = " << humanizer_coast_decay << "\n"
+        << "humanizer_recoil_pattern_enabled = " << (humanizer_recoil_pattern_enabled ? "true" : "false") << "\n"
+        << "humanizer_recoil_pattern_jitter = " << humanizer_recoil_pattern_jitter << "\n\n";
 
     // Arduino
     file << "# Arduino\n"

@@ -70,6 +70,46 @@ public:
     float wind_M;
     float wind_D;
 
+    // Humanizer (P0 legitimite, conservative defaults: all OFF / 0).
+    bool humanizer_enabled;
+    float humanizer_deadzone_px;
+    float humanizer_target_delay_ms;
+    float humanizer_switch_delay_ms;
+    float humanizer_kill_delay_ms;
+    float humanizer_vischeck_delay_ms;
+    float humanizer_aim_delay_ms;
+    float humanizer_delay_jitter_ms;
+    bool humanizer_stickiness_enabled;
+    float humanizer_stickiness_margin_px;
+    int humanizer_stickiness_hold_frames;
+    float humanizer_switch_cooldown_ms;
+    bool humanizer_overshoot_enabled;
+    float humanizer_overshoot_min_px;
+    float humanizer_overshoot_max_px;
+    float humanizer_overshoot_dist_px;
+    float humanizer_overshoot_return_t;
+    bool humanizer_oneeuro_enabled;
+    float humanizer_oneeuro_fcmin;
+    float humanizer_oneeuro_beta;
+    float humanizer_oneeuro_dcutoff;
+    bool humanizer_fitts_enabled;
+    float humanizer_fitts_a;
+    float humanizer_fitts_b;
+    float humanizer_fitts_W;
+    bool humanizer_jerk_enabled;
+    int humanizer_noise_mode;
+    float humanizer_noise_theta;
+    float humanizer_noise_sigma;
+    float humanizer_noise_signal_gain;
+    bool humanizer_lead_adaptive;
+    float humanizer_lead_gain;
+    float humanizer_lead_max_scale;
+    bool humanizer_coast_enabled;
+    int humanizer_coast_frames;
+    float humanizer_coast_decay;
+    bool humanizer_recoil_pattern_enabled;
+    float humanizer_recoil_pattern_jitter;
+
     // Arduino
     int arduino_baudrate;
     std::string arduino_port;
