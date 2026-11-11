@@ -6,6 +6,7 @@
 
 #include "depth_anything_trt.h"
 #include "model_path.h"
+#include "fs_utf8.h"
 
 #include <NvOnnxParser.h>
 #include <algorithm>
@@ -41,7 +42,7 @@ namespace depth_anything
         {
             std::filesystem::path enginePath=std::filesystem::u8path(onnxPath);
             enginePath.replace_extension(".engine");
-            return enginePath.u8string();
+            return aimbot::fsUtf8(enginePath);
         }
 
         bool CheckCuda(cudaError_t status, const char* action, std::string& last_error)

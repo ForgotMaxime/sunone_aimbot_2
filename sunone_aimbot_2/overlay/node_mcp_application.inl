@@ -70,7 +70,7 @@ const std::vector<ApplicationField>& applicationFields()
         FIELD(teensy_hid_usage_page,"input",0,65535);FIELD(teensy_hid_usage_id,"input",0,65535);FIELD(teensy_hid_open_index,"input",0,255);
         FIELD(teensy_hid_packet_timeout_ms,"input",0,60000);FIELD(teensy_hid_reconnect_interval_ms,"input",0,60000);
         FIELD(kmbox_net_ip,"input",0,0);FIELD(kmbox_net_port,"input",0,0);FIELD(kmbox_net_uuid,"input",0,0);FIELD(kmbox_a_pidvid,"input",0,0);
-        FIELD(makcu_baudrate,"input",9600,921600);FIELD(makcu_port,"input",0,0);FIELD(makcu_enable_keys,"input",0,0);
+        FIELD(makcu_baudrate,"input",9600,4000000);FIELD(makcu_port,"input",0,0);FIELD(makcu_enable_keys,"input",0,0);
         FIELD(button_targeting,"hotkeys",0,0);FIELD(button_shoot,"hotkeys",0,0);FIELD(button_zoom,"hotkeys",0,0);FIELD(button_exit,"hotkeys",0,0);
         FIELD(button_pause,"hotkeys",0,0);FIELD(button_reload_config,"hotkeys",0,0);FIELD(button_open_overlay,"hotkeys",0,0);FIELD(enable_arrows_settings,"hotkeys",0,0);
         FIELD(overlay_opacity,"overlay",252,255);FIELD(overlay_ui_scale,"overlay",0.85,1.35);FIELD(overlay_sidebar_collapsed,"overlay",0,0);FIELD(overlay_exclude_from_capture,"overlay",0,0);

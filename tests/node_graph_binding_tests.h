@@ -55,14 +55,14 @@ void testWideOptionMasksAndTextOutputs()
 {
     Service service;VisionFixture fixture;auto workspace=emptyWorkspace();auto& graph=workspace.graphs[3];
     graph.nodes={defaultNode(NodeKind::CaptureSource,1),defaultNode(NodeKind::RenderOverlay,2),defaultNode(NodeKind::Boolean,3),
-        defaultNode(NodeKind::Integer,4),defaultNode(NodeKind::Float,5),stringNode(6,u8"icons/пример.png"),defaultNode(NodeKind::Boolean,7)};
+        defaultNode(NodeKind::Integer,4),defaultNode(NodeKind::Float,5),stringNode(6,"icons/пример.png"),defaultNode(NodeKind::Boolean,7)};
     node(graph,4).value=191;node(graph,5).value=1.75;node(graph,7).value=0;
     const int late=optionPin(NodeKind::RenderOverlay,"snap_boost");require(late>31,"Wide-mask regression no longer exercises a high input");
     graph.links={{3,0,2,0},{1,0,2,1},{4,0,2,optionPin(NodeKind::RenderOverlay,"game_overlay_box_r")},{5,0,2,late},
         {6,0,2,optionPin(NodeKind::RenderOverlay,"game_overlay_icon_path")},{7,0,2,optionPin(NodeKind::RenderOverlay,"game_overlay_draw_boxes")}};
     bool received=false;int renders=0;
     fixture.context.render=[&](int,const FrameStream&,const DetectionStream&,const MaskStream&,const FrameStream&,const Node& settings){
-        ++renders;received=parameter(settings,"game_overlay_box_r")==191&&parameter(settings,"snap_boost")==1.75&&parameter(settings,"game_overlay_draw_boxes")==0&&textParameter(settings,"game_overlay_icon_path")==u8"icons/пример.png";return true;};
+        ++renders;received=parameter(settings,"game_overlay_box_r")==191&&parameter(settings,"snap_boost")==1.75&&parameter(settings,"game_overlay_draw_boxes")==0&&textParameter(settings,"game_overlay_icon_path")=="icons/пример.png";return true;};
     publish(service,workspace);service.evaluateVision(fixture.context);
     require(received&&renders==1&&(sampleNode(service.telemetry(),3,2).readInputs&(std::uint64_t{1}<<late)),"A setting above input 31 was lost or its callback saw stale values");
     node(graph,4).value=999;publish(service,workspace);service.evaluateVision(fixture.context);
@@ -73,7 +73,7 @@ void testMonitorsConfigureCaptureBeforeAFrameExists()
     Service service;VisionFixture fixture;auto workspace=emptyWorkspace();auto& graph=workspace.graphs[3];
     graph.nodes={defaultNode(NodeKind::CaptureSource,1),defaultNode(NodeKind::Inference,2),defaultNode(NodeKind::VisionOutput,3),defaultNode(NodeKind::Boolean,4),
         defaultNode(NodeKind::GetMonitors,5),defaultNode(NodeKind::MonitorAt,6),defaultNode(NodeKind::Integer,7),defaultNode(NodeKind::Integer,8),
-        stringNode(9,"winrt"),stringNode(10,u8"models/модель.onnx"),defaultNode(NodeKind::GetMonitor,11),defaultNode(NodeKind::SetMonitor,12),defaultNode(NodeKind::Boolean,13)};
+        stringNode(9,"winrt"),stringNode(10,"models/модель.onnx"),defaultNode(NodeKind::GetMonitor,11),defaultNode(NodeKind::SetMonitor,12),defaultNode(NodeKind::Boolean,13)};
     node(graph,1).parameters["enabled"]=0;node(graph,1).textParameters["capture_target"]="window";
     node(graph,7).value=1;node(graph,8).value=144;node(graph,11).textParameters["name"]="screen";node(graph,12).textParameters["name"]="screen";
     graph.links={{1,0,2,0},{2,0,3,1},{13,0,3,0},{5,0,6,0},{7,0,6,1},{6,0,12,0},{11,0,1,0},
@@ -91,7 +91,7 @@ void testMonitorsConfigureCaptureBeforeAFrameExists()
     fixture.context.captureFrame=[&](int key,const Node& settings){sameOptions=parameter(settings,"monitor_idx")==9&&textParameter(settings,"capture_method")=="winrt";return capture(key,settings);};
     fixture.context.useConfigurationSnapshot=true;service.evaluateVision(fixture.context);
     require(sameOptions&&enumerations==1&&fixture.captures==1&&fixture.inferences==1,"Frame evaluation recomputed configuration or used stale capture options");
-    require(sampleNode(service.telemetry(),3,2).value.detections->modelName==u8"models/модель.onnx","A model path was not driven by a String node");
+    require(sampleNode(service.telemetry(),3,2).value.detections->modelName=="models/модель.onnx","A model path was not driven by a String node");
     graph.nodes.push_back(defaultNode(NodeKind::KeyHeld,14));node(graph,14).parameters["virtual_key"]=65;
     graph.nodes.push_back(defaultNode(NodeKind::SelectInteger,15));graph.nodes.push_back(defaultNode(NodeKind::Integer,16));
     for(auto& link:graph.links)if(link.toNode==6&&link.toPort==1)link.fromNode=15;
@@ -167,11 +167,11 @@ void testLocalInputTypesAndPersistence()
 {
     Service service;VisionFixture fixture;auto workspace=emptyWorkspace();auto& graph=workspace.graphs[3];
     graph.nodes={defaultNode(NodeKind::ConcatString,1),defaultNode(NodeKind::CaptureSource,2),defaultNode(NodeKind::CollectDataset,3)};
-    node(graph,1).inputTexts={{0,u8"datasets/пример"},{1,"/session"}};node(graph,3).parameters["enabled"]=1;
+    node(graph,1).inputTexts={{0,"datasets/пример"},{1,"/session"}};node(graph,3).parameters["enabled"]=1;
     graph.links={{2,0,3,1},{1,0,3,optionPin(NodeKind::CollectDataset,"collect_output_dir")}};
     std::string received;fixture.context.collect=[&](int,const FrameStream&,const DetectionStream&,const Node& settings){received=textParameter(settings,"collect_output_dir");return true;};
     publish(service,workspace);service.evaluateVision(fixture.context);
-    require(received==u8"datasets/пример/session","Local text inputs did not reach a bound native setting");
+    require(received=="datasets/пример/session","Local text inputs did not reach a bound native setting");
     auto& ints=workspace.graphs[2];ints.nodes={defaultNode(NodeKind::IntegerAdd,1),defaultNode(NodeKind::RecoilOutput,2)};
     node(ints,1).inputValues={{0,7},{1,-2}};node(ints,2).inputValues={{0,1}};ints.links={{1,0,2,1}};
     publish(service,workspace);Fixture control;require(service.evaluate(control.context).recoilStrength==5,"Int input literals lost numeric promotion");

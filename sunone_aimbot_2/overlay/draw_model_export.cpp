@@ -9,6 +9,7 @@
 #include "overlay/ui_sections.h"
 #include "overlay/export_job.h"
 #include "overlay/model_export_control.h"
+#include "fs_utf8.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -49,13 +50,13 @@ std::string buildModel(const std::string& input,bool depth,bool rebuild,const Tr
     if(depth)
     {
         auto output=source;output.replace_extension(".engine");std::error_code error;
-        if(!rebuild&&std::filesystem::is_regular_file(output,error)&&std::filesystem::file_size(output,error)>0)return output.u8string();
+        if(!rebuild&&std::filesystem::is_regular_file(output,error)&&std::filesystem::file_size(output,error)>0)return aimbot::fsUtf8(output);
         depth_anything::DepthAnythingTrt builder;std::string path;
         if(!builder.exportEngine(input,gLogger,&path))throw std::runtime_error(builder.lastError());
         return path;
     }
     const auto output=std::filesystem::u8path(trtEngineCachePath(input,options));std::error_code error;
-    if(!rebuild&&std::filesystem::is_regular_file(output,error)&&std::filesystem::file_size(output,error)>0)return output.u8string();
+    if(!rebuild&&std::filesystem::is_regular_file(output,error)&&std::filesystem::file_size(output,error)>0)return aimbot::fsUtf8(output);
     std::unique_ptr<nvinfer1::IRuntime> runtime(nvinfer1::createInferRuntime(gLogger));
     if(!runtime)throw std::runtime_error("TensorRT runtime creation failed.");
     std::unique_ptr<nvinfer1::ICudaEngine> engine(buildEngineFromOnnx(input,gLogger,options,*runtime));
@@ -70,7 +71,7 @@ std::string buildModel(const std::string& input,bool depth,bool rebuild,const Tr
     if(cancel.load()){std::filesystem::remove(temporary,error);return {};}
     if(!MoveFileExW(temporary.c_str(),output.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
     {std::filesystem::remove(temporary,error);throw std::runtime_error("Could not finish writing the engine file.");}
-    return output.u8string();
+    return aimbot::fsUtf8(output);
 }
 #endif
 struct ModelFile{std::string label,path;};
@@ -83,8 +84,8 @@ std::vector<ModelFile> onnxFiles(bool depth)
         for(std::filesystem::directory_iterator it(directory,error),end;!error&&it!=end;it.increment(error))
         {
             if(!it->is_regular_file(error))continue;
-            auto extension=it->path().extension().u8string();std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
-            if(extension==".onnx")files.push_back({it->path().generic_u8string(),std::filesystem::absolute(it->path(),error).u8string()});
+            auto extension=aimbot::fsUtf8(it->path().extension());std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+            if(extension==".onnx")files.push_back({aimbot::fsUtf8Generic(it->path()),aimbot::fsUtf8(std::filesystem::absolute(it->path(),error))});
         }
     }
     std::sort(files.begin(),files.end(),[](const auto& a,const auto& b){return a.label<b.label;});return files;
@@ -97,12 +98,12 @@ bool ModelExport::start(const std::string& input,bool depth,const Options& setti
 #ifndef USE_CUDA
     error="TensorRT export requires the CUDA build. DML/CPU nodes use ONNX directly.";return false;
 #else
-    std::error_code ec;const auto path=std::filesystem::u8path(input);auto extension=path.extension().u8string();
+    std::error_code ec;const auto path=std::filesystem::u8path(input);auto extension=aimbot::fsUtf8(path.extension());
     std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
     if(extension!=".onnx"||!std::filesystem::is_regular_file(path,ec)){error="Choose an existing ONNX model.";return false;}
     if(!depth&&(settings.resolution<32||settings.resolution>8192||settings.minimum<32||settings.maximum>8192||settings.minimum>settings.optimal||settings.optimal>settings.maximum))
     {error="Use dimensions from 32 to 8192, with minimum <= optimal <= maximum.";return false;}
-    const auto absolute=std::filesystem::absolute(path,ec).u8string();if(ec){error="Cannot resolve the model path.";return false;}
+    const auto absolute=aimbot::fsUtf8(std::filesystem::absolute(path,ec));if(ec){error="Cannot resolve the model path.";return false;}
     TrtBuildOptions options;options.fixedInputSize=settings.fixed;options.enableFp16=settings.fp16;options.enableFp8=settings.fp8;
     options.inputWidth=options.inputHeight=settings.resolution;options.minProfileSize=settings.minimum;options.optProfileSize=settings.optimal;options.maxProfileSize=settings.maximum;
     if(!exportJob.start(absolute,[absolute,depth,settings,options](const auto& cancel){return buildModel(absolute,depth,settings.rebuild,options,cancel);}))

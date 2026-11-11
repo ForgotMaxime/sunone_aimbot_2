@@ -137,7 +137,7 @@ void testDistantGroupTitlesAreReadableAndCached()
 void testLongGroupTitlesAndFitStayWithinBounds()
 {
     gestureScenario="Long and Unicode group titles fit and update after edits";EditorHarness h;GroupCaption cached;
-    Group group;group.id=1;group.width=256;group.title=u8"Long title with repeated sections and Unicode: \u041f\u0440\u0438\u0446\u0435\u043b\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u043a\u0430\u043b\u0438\u0431\u0440\u043e\u0432\u043a\u0430";
+    Group group;group.id=1;group.width=256;group.title="Long title with repeated sections and Unicode: \u041f\u0440\u0438\u0446\u0435\u043b\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u043a\u0430\u043b\u0438\u0431\u0440\u043e\u0432\u043a\u0430";
     const auto& caption=groupOverviewCaption(cached,group,0.25f,ImGui::GetFont(),ImGui::GetFontSize());
     require(caption.lines.size()<=2&&caption.extent.x<=caption.available.x+0.1f&&caption.extent.y<=caption.available.y+0.1f&&cached.source==group.title,"A long group title spills out or loses its full source name");
     for(const char* cursor=caption.text.c_str();*cursor;)

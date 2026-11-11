@@ -1486,9 +1486,8 @@ void SetupImGui()
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
 
-    // The editor uses a fixed sidebar layout; keep ImGui DockSpace OFF so no
-    // dock targets, guides or extra windows can appear.
-    io.ConfigFlags &= ~static_cast<ImGuiConfigFlags>(ImGuiConfigFlags_DockingEnable);
+    // The editor uses a fixed sidebar layout; the vendored ImGui has no
+    // docking support, so there is nothing to disable here.
 
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);

@@ -239,11 +239,11 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile,nvinfer1:
                 timingFile.seekg(0,std::ios::beg);
                 std::vector<char> blob(size);
                 if(timingFile.read(blob.data(),static_cast<std::streamsize>(size)))
-                    timingCache.reset(builder->createTimingCache(blob.data(),size));
+                    timingCache.reset(settings->createTimingCache(blob.data(),size));
             }
         }
         if(!timingCache)
-            timingCache.reset(builder->createTimingCache(nullptr,0));
+            timingCache.reset(settings->createTimingCache(nullptr,0));
         if(timingCache)
             settings->setTimingCache(*timingCache,false);
     }

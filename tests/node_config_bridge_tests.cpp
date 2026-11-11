@@ -165,16 +165,16 @@ void testModelInitializationRespectsBackendAndAmbiguity()
 }
 void testDepthModelsResolveSharedLegacyAndCustomLocations()
 {
-    ModelDirectory files;files.file("shared.onnx");files.file(u8"глубина.ONNX");
+    ModelDirectory files;files.file("shared.onnx");files.file("глубина.ONNX");
     std::string resolved,error;
     require(depth_anything::resolveModelPath("models/shared.onnx",resolved,error)&&std::filesystem::u8path(resolved)==files.path/"models/shared.onnx",
         "Depth inference still rejects a model selected from models");
     require(depth_anything::resolveModelPath("shared.onnx",resolved,error)&&std::filesystem::u8path(resolved)==files.path/"models/shared.onnx","A bare depth model cannot fall back to models");
-    require(depth_anything::resolveModelPath(u8"models/глубина.ONNX",resolved,error),"Unicode depth model paths are not resolved");
+    require(depth_anything::resolveModelPath("models/глубина.ONNX",resolved,error),"Unicode depth model paths are not resolved");
     std::filesystem::create_directory("depth_models");{std::ofstream file("depth_models/shared.onnx");file<<"legacy fixture";}
     require(depth_anything::resolveModelPath("shared.onnx",resolved,error)&&std::filesystem::u8path(resolved)==files.path/"depth_models/shared.onnx","A legacy bare depth path changed its selected file");
     std::filesystem::create_directory("custom");{std::ofstream file("custom/chosen.engine");file<<"custom fixture";}
-    require(depth_anything::resolveModelPath((files.path/"custom/chosen.engine").u8string(),resolved,error)&&std::filesystem::u8path(resolved)==files.path/"custom/chosen.engine","The depth file picker cannot use an explicit custom path");
+    require(depth_anything::resolveModelPath((files.path/"custom/chosen.engine").string(),resolved,error)&&std::filesystem::u8path(resolved)==files.path/"custom/chosen.engine","The depth file picker cannot use an explicit custom path");
     require(!depth_anything::resolveModelPath("models/missing.onnx",resolved,error)&&resolved.empty()&&!error.empty(),"A missing depth model retains a stale resolved path");
 }
 void testLegacyMouseProfilesBecomeDisabledCalibrationNodes()

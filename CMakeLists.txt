@@ -16,6 +16,13 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# C++20 deprecation noise kept at warning level project-wide: u8path and
+# atomic<shared_ptr> have historical behavior the codebase relies on.
+add_compile_definitions(
+    _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING
+    _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING
+)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(AIMBOT_USE_CUDA "Enable CUDA backend (USE_CUDA)" OFF)
@@ -410,8 +417,12 @@ target_compile_definitions(ai PRIVATE
     UNICODE
     _UNICODE
     _CONSOLE
+    NOMINMAX
     # C++/WinRT still includes the experimental coroutine header in C++17 mode.
     _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+    # C++20 build: keep historical u8path/atomic<shared_ptr> behavior.
+    _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING
+    _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING
 )
 
 if(MSVC)
@@ -614,7 +625,7 @@ if(BUILD_TESTING)
     target_include_directories(overlay_window_geometry_tests PRIVATE "${SRC_DIR}")
     if(MSVC)
         set_target_properties(overlay_window_geometry_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(overlay_window_geometry_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(overlay_window_geometry_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_test(NAME overlay_window_geometry_regressions COMMAND overlay_window_geometry_tests)
     # Exercise the real worker and control loop against fake input. This target
@@ -640,12 +651,12 @@ if(BUILD_TESTING)
         "${SRC_DIR}/mouse"
         "${AIMBOT_OPENCV_INCLUDE_DIR}"
     )
-    target_compile_definitions(input_runtime_tests PRIVATE UNICODE _UNICODE _CONSOLE)
+    target_compile_definitions(input_runtime_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
     target_link_libraries(input_runtime_tests PRIVATE "${AIMBOT_OPENCV_LIBRARY}")
     if(MSVC)
         set_target_properties(input_runtime_tests PROPERTIES
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(input_runtime_tests PRIVATE /W3 /sdl /permissive- /EHsc)
+        target_compile_options(input_runtime_tests PRIVATE /W3 /sdl /permissive- /EHsc /utf-8)
     endif()
     # Both executables use the same runtime directory. Let ai stage its DLLs
     # first instead of concurrently copying the same OpenCV DLL twice.
@@ -658,7 +669,7 @@ if(BUILD_TESTING)
     target_include_directories(node_graph_tests PRIVATE "${SRC_DIR}")
     if(MSVC)
         set_target_properties(node_graph_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(node_graph_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(node_graph_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_test(NAME node_graph_regressions COMMAND node_graph_tests)
     add_executable(node_config_bridge_tests
@@ -666,10 +677,10 @@ if(BUILD_TESTING)
         "${SRC_DIR}/nodes/node_graph.cpp"
         "${SRC_DIR}/nodes/node_config_bridge.cpp"
         "${SRC_DIR}/keyboard/keycodes.cpp")
-    target_include_directories(node_config_bridge_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config")
+    target_include_directories(node_config_bridge_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config" "${SRC_DIR}/include")
     if(MSVC)
         set_target_properties(node_config_bridge_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(node_config_bridge_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(node_config_bridge_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_test(NAME node_config_migration COMMAND node_config_bridge_tests)
     add_executable(postprocess_golden_tests
@@ -677,6 +688,7 @@ if(BUILD_TESTING)
         "${SRC_DIR}/detector/postProcess.cpp")
     target_include_directories(postprocess_golden_tests PRIVATE
         "${SRC_DIR}"
+        "${SRC_DIR}/include"
         "${AIMBOT_OPENCV_INCLUDE_DIR}")
     target_compile_definitions(postprocess_golden_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
     if(AIMBOT_ENABLE_AVX2)
@@ -685,7 +697,7 @@ if(BUILD_TESTING)
     target_link_libraries(postprocess_golden_tests PRIVATE "${AIMBOT_OPENCV_LIBRARY}")
     if(MSVC)
         set_target_properties(postprocess_golden_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(postprocess_golden_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(postprocess_golden_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     # Same staging rule as the other OpenCV-linked tests: let ai copy the
     # runtime DLLs first instead of racing it.
@@ -697,10 +709,10 @@ if(BUILD_TESTING)
         "${SRC_DIR}/nodes/node_graph.cpp"
         "${SRC_DIR}/nodes/node_config_bridge.cpp"
         "${SRC_DIR}/keyboard/keycodes.cpp")
-    target_include_directories(config_migrate_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config")
+    target_include_directories(config_migrate_tests PRIVATE "${SRC_DIR}" "${SRC_DIR}/config" "${SRC_DIR}/include")
     if(MSVC)
         set_target_properties(config_migrate_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(config_migrate_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(config_migrate_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_test(NAME config_migrate_regressions COMMAND config_migrate_tests)
     add_executable(vision_outputs_tests
@@ -716,7 +728,7 @@ if(BUILD_TESTING)
     target_compile_definitions(vision_outputs_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
     if(MSVC)
         set_target_properties(vision_outputs_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(vision_outputs_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(vision_outputs_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_dependencies(vision_outputs_tests ai)
     add_test(NAME vision_outputs_regressions COMMAND vision_outputs_tests)
@@ -755,11 +767,12 @@ if(BUILD_TESTING)
         NODE_BENCHMARK_BACKEND="$<IF:$<BOOL:${AIMBOT_USE_CUDA}>,cuda,dml>")
     target_include_directories(node_editor_input_tests PRIVATE
         "${SRC_DIR}" "${SRC_DIR}/config" "${SRC_DIR}/keyboard"
+        "${SRC_DIR}/include"
         "${SRC_DIR}/imgui" "${AIMBOT_OPENCV_INCLUDE_DIR}" "${AIMBOT_CPPWINRT_INCLUDE_DIR}")
     target_compile_definitions(node_editor_input_tests PRIVATE UNICODE _UNICODE _CONSOLE NOMINMAX)
     if(MSVC)
         set_target_properties(node_editor_input_tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-        target_compile_options(node_editor_input_tests PRIVATE /W3 /permissive- /EHsc)
+        target_compile_options(node_editor_input_tests PRIVATE /W3 /permissive- /EHsc /utf-8)
     endif()
     add_test(NAME node_editor_input_regressions COMMAND node_editor_input_tests)
     set_tests_properties(node_editor_input_regressions PROPERTIES TIMEOUT 30)

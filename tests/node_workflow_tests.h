@@ -13,7 +13,7 @@ void testWorkflowPagesAndOrdinaryTemplates()
     for(auto& graph:workspace.graphs)graph.pageName.clear();
     Service service;Context context;publish(service,workspace);
     require(service.evaluate(context).recoilStrength==5,"Independent workflow actions overwrite each other");
-    const auto revision=service.revision();workspace.graphs[0].workflowName=u8"My logic";workspace.graphs[0].workflowIcon=8;publish(service,workspace);
+    const auto revision=service.revision();workspace.graphs[0].workflowName="My logic";workspace.graphs[0].workflowIcon=8;publish(service,workspace);
     require(service.revision()==revision,"Changing a workflow name/icon restarted execution");
     workspace.graphs[0].enabled=false;publish(service,workspace);require(service.evaluate(context).recoilStrength==3,"A disabled workflow still executed");
     const auto metadata=service.workspaceMetadata();require(metadata.graphs.size()==2&&metadata.graphs[0].nodes.empty()&&metadata.graphs[0].workflowIcon==8,"Sidebar metadata copied graph payloads or lost customization");

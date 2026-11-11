@@ -35,51 +35,14 @@ std::string FormatHresult(HRESULT hr)
 }
 
 #ifdef USE_CUDA
-// P0 capture-latency: dedicated async copy stream + second interop slot
-// (double-buffer). Registered once per capturer, keyed by instance, so the
-// class header stays untouched. Falls back to the synchronous path when the
-// stream or the second texture cannot be created.
-cudaStream_t& DdaCopyStream()
-{
-    static cudaStream_t stream = nullptr;
-    return stream;
-}
-
-std::mutex& DdaCopyMutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
-struct DdaExtraInterop
-{
-    ID3D11Texture2D* texture = nullptr;
-    cudaGraphicsResource* resource = nullptr;
-    bool ready = false;
-};
-
-std::unordered_map<const void*, DdaExtraInterop>& DdaExtraInteropMap()
-{
-    static std::unordered_map<const void*, DdaExtraInterop> map;
-    return map;
-}
-
-std::unordered_map<const void*, int>& DdaFlipMap()
-{
-    static std::unordered_map<const void*, int> map;
-    return map;
-}
-
-bool EnsureDdaCopyStream()
-{
-    cudaStream_t stream = DdaCopyStream();
-    if (stream)
-        return true;
-    if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess)
-        return false;
-    DdaCopyStream() = stream;
-    return true;
-}
+// NOTE (illegal-memory-access fix): the D3D11 immediate context and CUDA
+// streams have no mutual ordering. Mapping the interop resource on a
+// non-zero CUDA stream races with the in-flight CopySubresourceRegion above
+// (cudaGraphicsMapResources failed: an illegal memory access was
+// encountered). The NULL stream keeps the driver-provided D3D<->CUDA
+// ordering; the async copy + ping-pong only paid off with a D3D fence, so
+// this path stays synchronous. Kept wins: early ReleaseFrame, NoPresent
+// skip, latest-only ring, e2e bench.
 #endif
 }
 
@@ -634,48 +597,10 @@ bool DuplicationAPIScreenCapture::GetNextFrameGpu(
     sourceRegion.bottom = sourceRegion.top + copyHeight;
     sourceRegion.back = 1;
 
-    // P0: double-buffered interop (ping-pong) so the next DDA acquire can
-    // proceed while the previous async copy completes. The extra slot is
-    // registered once and reused; on failure we fall back to the primary.
+    // Single registered interop texture, mapped on the NULL stream so the
+    // driver orders the map after the D3D copy above (see note).
     ID3D11Texture2D* destTexture = interopTextureGPU;
     cudaGraphicsResource* destResource = cudaInteropResource;
-    {
-        std::lock_guard<std::mutex> guard(DdaCopyMutex());
-        DdaExtraInterop& extra = DdaExtraInteropMap()[this];
-        if (!extra.ready && d3dDevice && regionWidth > 0 && regionHeight > 0)
-        {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = static_cast<UINT>(regionWidth);
-            desc.Height = static_cast<UINT>(regionHeight);
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            desc.SampleDesc.Count = 1;
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            if (SUCCEEDED(d3dDevice->CreateTexture2D(&desc, nullptr, &extra.texture)))
-            {
-                if (cudaGraphicsD3D11RegisterResource(&extra.resource, extra.texture,
-                    cudaGraphicsRegisterFlagsNone) == cudaSuccess)
-                    extra.ready = true;
-                else
-                {
-                    SafeRelease(&extra.texture);
-                    extra.resource = nullptr;
-                }
-            }
-        }
-        if (extra.ready && extra.texture && extra.resource)
-        {
-            int& flip = DdaFlipMap()[this];
-            flip = 1 - flip;
-            if (flip != 0)
-            {
-                destTexture = extra.texture;
-                destResource = extra.resource;
-            }
-        }
-    }
 
     d3dContext->CopySubresourceRegion(
         destTexture,
@@ -690,16 +615,8 @@ bool DuplicationAPIScreenCapture::GetNextFrameGpu(
     m_ddaManager->ReleaseFrame();
     frameCtx.texture->Release();
 
-    // P0: async interop copy on a dedicated stream (registered once at init).
-    cudaStream_t copyStream = nullptr;
-    {
-        std::lock_guard<std::mutex> guard(DdaCopyMutex());
-        if (EnsureDdaCopyStream())
-            copyStream = DdaCopyStream();
-    }
-    const bool useAsync = (copyStream != nullptr);
-
-    cudaError_t cuErr = cudaGraphicsMapResources(1, &destResource, useAsync ? copyStream : 0);
+    // Synchronous map on the NULL stream: ordered after the D3D copy.
+    cudaError_t cuErr = cudaGraphicsMapResources(1, &destResource, 0);
     if (cuErr != cudaSuccess)
     {
         std::cerr << "[DDA] cudaGraphicsMapResources failed: " << cudaGetErrorString(cuErr) << std::endl;
@@ -716,7 +633,7 @@ bool DuplicationAPIScreenCapture::GetNextFrameGpu(
     if (cuErr != cudaSuccess)
     {
         std::cerr << "[DDA] cudaGraphicsSubResourceGetMappedArray failed: " << cudaGetErrorString(cuErr) << std::endl;
-        cudaGraphicsUnmapResources(1, &destResource, useAsync ? copyStream : 0);
+        cudaGraphicsUnmapResources(1, &destResource, 0);
         cudaInteropReady = false;
         SetGpuCaptureStatus(status, GpuCaptureStatus::CudaArrayFailed);
         if (accumulatedFrames)
@@ -727,35 +644,17 @@ bool DuplicationAPIScreenCapture::GetNextFrameGpu(
 
     gpuFrameBgra.create(regionHeight, regionWidth, CV_8UC4);
 
-    if (useAsync)
-    {
-        cuErr = cudaMemcpy2DFromArrayAsync(
-            gpuFrameBgra.ptr<unsigned char>(),
-            gpuFrameBgra.step,
-            mappedArray,
-            0, 0,
-            static_cast<size_t>(regionWidth) * 4,
-            static_cast<size_t>(regionHeight),
-            cudaMemcpyDeviceToDevice,
-            copyStream
-        );
-        if (cuErr == cudaSuccess)
-            cuErr = cudaStreamSynchronize(copyStream);
-    }
-    else
-    {
-        cuErr = cudaMemcpy2DFromArray(
-            gpuFrameBgra.ptr<unsigned char>(),
-            gpuFrameBgra.step,
-            mappedArray,
-            0, 0,
-            static_cast<size_t>(regionWidth) * 4,
-            static_cast<size_t>(regionHeight),
-            cudaMemcpyDeviceToDevice
-        );
-    }
+    cuErr = cudaMemcpy2DFromArray(
+        gpuFrameBgra.ptr<unsigned char>(),
+        gpuFrameBgra.step,
+        mappedArray,
+        0, 0,
+        static_cast<size_t>(regionWidth) * 4,
+        static_cast<size_t>(regionHeight),
+        cudaMemcpyDeviceToDevice
+    );
 
-    cudaError_t unmapErr = cudaGraphicsUnmapResources(1, &destResource, useAsync ? copyStream : 0);
+    cudaError_t unmapErr = cudaGraphicsUnmapResources(1, &destResource, 0);
     if (unmapErr != cudaSuccess)
     {
         std::cerr << "[DDA] cudaGraphicsUnmapResources failed: " << cudaGetErrorString(unmapErr) << std::endl;
@@ -828,18 +727,6 @@ bool DuplicationAPIScreenCapture::createCudaInteropTexture()
 
 void DuplicationAPIScreenCapture::releaseCudaInteropTexture()
 {
-    {
-        std::lock_guard<std::mutex> guard(DdaCopyMutex());
-        auto it = DdaExtraInteropMap().find(this);
-        if (it != DdaExtraInteropMap().end())
-        {
-            if (it->second.resource)
-                cudaGraphicsUnregisterResource(it->second.resource);
-            SafeRelease(&it->second.texture);
-            DdaExtraInteropMap().erase(it);
-            DdaFlipMap().erase(this);
-        }
-    }
     if (cudaInteropResource)
     {
         cudaError_t cuErr = cudaGraphicsUnregisterResource(cudaInteropResource);

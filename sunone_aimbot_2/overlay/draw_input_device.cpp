@@ -475,7 +475,7 @@ void draw_input_device()
                 input_method_changed.store(true);
             }
 
-            std::vector<int> baud_list = { 9600, 19200, 38400, 57600, 115200 };
+            std::vector<int> baud_list = { 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1000000, 2000000, 4000000 };
             std::vector<std::string> baud_str_list;
             for (int b : baud_list) baud_str_list.push_back(std::to_string(b));
 

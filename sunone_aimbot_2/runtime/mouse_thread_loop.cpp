@@ -131,7 +131,6 @@ inline double resolveRecoilStrength(double legacyStrength, RecoilPatternState& s
     return v + d(rng);
 }
 }
-}
 
 void createInputDevices();
 void assignInputDevices();

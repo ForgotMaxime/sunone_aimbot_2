@@ -120,7 +120,7 @@ private:
     int findTrackIndexById(int id) const;
     int chooseBestTrack(int screenWidth, int screenHeight) const;
     int chooseBestTrack(int screenWidth, int screenHeight,
-        const TargetSelectionSettings& settings);
+        const TargetSelectionSettings& settings) const;
     int allowedMissedFrames(const TrackState& t) const;
     void pruneDeadTracks();
 
