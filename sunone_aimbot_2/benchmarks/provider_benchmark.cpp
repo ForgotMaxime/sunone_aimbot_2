@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -42,11 +44,13 @@ struct CliOptions
     bool help = false;
     bool listDevices = false;
     bool saveResults = true;
+    bool e2e = false;
     std::string providersRequested = "cuda";
     std::string modelPath;
     std::string cudaModelPath;
     std::string imagePath;
     std::string resultsPath = "benchmark_results/provider_benchmark_cuda.csv";
+    std::string e2eResultsPath = "benchmark_results/provider_benchmark_e2e.csv";
     int runs = 100;
     int warmupRuns = 10;
     int resolution = 0;
@@ -186,6 +190,17 @@ CliOptions ParseCli(int argc, char** argv)
             ParseInt(value, &options.resolution);
             continue;
         }
+        if (arg == "--bench-e2e" || arg == "--e2e")
+        {
+            options.e2e = true;
+            continue;
+        }
+        if (ConsumeValue(argc, argv, &i, arg, "--bench-e2e-results", &value) ||
+            ConsumeValue(argc, argv, &i, arg, "--e2e-results", &value))
+        {
+            options.e2eResultsPath = value;
+            continue;
+        }
         if (arg == "--bench-no-save")
         {
             options.saveResults = false;
@@ -211,6 +226,8 @@ void PrintHelp()
         << "  --bench-runs <n>                 Measured runs. Default: 100.\n"
         << "  --bench-warmup <n>               Warmup runs before timing. Default: 10.\n"
         << "  --bench-resolution <n>           Input size. Default: config detection_resolution.\n"
+        << "  --bench-e2e                      Staged e2e latency mode (QPC: acquire/pre/infer/post/send) with P50/P95/P99.\n"
+        << "  --bench-e2e-results <path>       E2E CSV append path. Default: benchmark_results/provider_benchmark_e2e.csv.\n"
         << "  --bench-no-save                  Do not append the summary row to CSV.\n"
         << "  --bench-list-devices             Print CUDA devices and exit.\n"
         << "  --benchmark-help                 Show this help.\n";
@@ -429,6 +446,268 @@ BenchmarkResult RunCudaBenchmark(const CliOptions& options, const std::filesyste
     return result;
 }
 
+// P0 capture-latency: staged e2e latency (QPC timestamps).
+// Stages per iteration: Acquire (frame ready) -> preprocess end -> infer end
+// -> post end -> SendInput (stub QPC, no actual input in bench).
+// Detector stage splits come from its per-run timers; Acquire is the
+// residual wall time minus detector stages (dispatch overhead, clamped >= 0)
+// since the synthetic frame is already resident.
+struct E2ESample
+{
+    double acquireMs = 0.0;
+    double preprocessMs = 0.0;
+    double inferenceMs = 0.0;
+    double postprocessMs = 0.0;
+    double sendInputMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct E2EResult
+{
+    std::string provider = "cuda";
+    std::string providerModel;
+    std::string status = "ok";
+    std::string error;
+    int inputW = 0;
+    int inputH = 0;
+    int runs = 0;
+    int warmupRuns = 0;
+    size_t lastDetections = 0;
+    double loadSeconds = 0.0;
+    double warmupSeconds = 0.0;
+    std::vector<E2ESample> samples;
+};
+
+double QpcToMs(std::uint64_t begin, std::uint64_t end)
+{
+    LARGE_INTEGER frequency{};
+    ::QueryPerformanceFrequency(&frequency);
+    if (frequency.QuadPart <= 0 || end < begin)
+        return 0.0;
+    return (static_cast<double>(end - begin) * 1000.0) / static_cast<double>(frequency.QuadPart);
+}
+
+std::uint64_t QpcNow()
+{
+    LARGE_INTEGER counter{};
+    ::QueryPerformanceCounter(&counter);
+    return static_cast<std::uint64_t>(counter.QuadPart);
+}
+
+double PercentileSorted(const std::vector<double>& sorted, double p)
+{
+    if (sorted.empty())
+        return 0.0;
+    const double clamped = p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
+    size_t rank = static_cast<size_t>(std::ceil(clamped * static_cast<double>(sorted.size())));
+    if (rank < 1u)
+        rank = 1u;
+    const size_t idx = rank - 1u;
+    return sorted[idx < sorted.size() ? idx : sorted.size() - 1u];
+}
+
+double StagePercentile(const std::vector<E2ESample>& samples, double E2ESample::*field, double p)
+{
+    std::vector<double> values;
+    values.reserve(samples.size());
+    for (const auto& sample : samples)
+        values.push_back(sample.*field);
+    std::sort(values.begin(), values.end());
+    return PercentileSorted(values, p);
+}
+
+E2EResult RunCudaE2EBenchmark(const CliOptions& options, const std::filesystem::path& modelPath, const cv::Mat& frame)
+{
+    E2EResult result;
+    result.providerModel = modelPath.string();
+    result.inputW = frame.cols;
+    result.inputH = frame.rows;
+    result.runs = options.runs;
+    result.warmupRuns = options.warmupRuns;
+
+    auto loadStart = Clock::now();
+    try
+    {
+        // P0: lock the latency-optimal path: static FP16 batch=1 + CUDA graph.
+        auto settings = NodeGraph::defaultNode(NodeGraph::NodeKind::Inference, 1);
+        settings.parameters["fixed_input_size"] = 1;
+        settings.parameters["confidence_threshold"] = config.confidence_threshold;
+        settings.parameters["nms_threshold"] = config.nms_threshold;
+        settings.parameters["max_detections"] = config.max_detections;
+        settings.parameters["use_cuda_graph"] = 1;
+        settings.parameters["use_pinned_memory"] = 1;
+        settings.parameters["export_enable_fp16"] = 1;
+        settings.parameters["export_enable_fp8"] = 0;
+        if (config.use_cuda_graph == 0 || config.use_pinned_memory == 0 || config.export_enable_fp16 == 0)
+            std::cout << "[E2E] Note: config flags differ from the locked static-FP16-batch1 path; bench forces use_cuda_graph=1, use_pinned_memory=1, export_enable_fp16=1.\n";
+        trt_detector.initialize(modelPath.string(), settings, frame.cols, frame.rows);
+        result.loadSeconds = std::chrono::duration<double>(Clock::now() - loadStart).count();
+        if (!trt_detector.isInitialized())
+            throw std::runtime_error("TensorRT detector did not initialize.");
+
+        auto warmupStart = Clock::now();
+        for (int i = 0; i < options.warmupRuns; ++i)
+        {
+            auto detections = trt_detector.detect(frame, settings);
+            result.lastDetections = detections.size();
+        }
+        result.warmupSeconds = std::chrono::duration<double>(Clock::now() - warmupStart).count();
+
+        result.samples.reserve(options.runs > 0 ? static_cast<size_t>(options.runs) : 0u);
+        for (int i = 0; i < options.runs; ++i)
+        {
+            const std::uint64_t tAcquire = QpcNow();
+            auto detections = trt_detector.detect(frame, settings);
+            const std::uint64_t tPost = QpcNow();
+            result.lastDetections = detections.size();
+
+            E2ESample sample;
+            sample.preprocessMs = trt_detector.lastPreprocessTime.count();
+            sample.inferenceMs =
+                (trt_detector.lastInferenceTime.count() + trt_detector.lastCopyTime.count());
+            sample.postprocessMs = trt_detector.lastPostprocessTime.count();
+            sample.totalMs = QpcToMs(tAcquire, tPost);
+            const double staged = sample.preprocessMs + sample.inferenceMs + sample.postprocessMs;
+            const double residual = sample.totalMs - staged;
+            sample.acquireMs = residual > 0.0 ? residual : 0.0;
+            // SendInput stub: QPC immediately after post (no actual input here).
+            const std::uint64_t tSend = QpcNow();
+            sample.sendInputMs = QpcToMs(tPost, tSend);
+            sample.totalMs += sample.sendInputMs;
+            result.samples.push_back(sample);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        result.status = "failed";
+        result.error = e.what();
+        result.loadSeconds = std::chrono::duration<double>(Clock::now() - loadStart).count();
+    }
+
+    trt_detector.requestStop();
+    return result;
+}
+
+void PrintE2ESummary(const CliOptions& options, const E2EResult& result)
+{
+    std::cout << "\nCUDA e2e latency summary (ms, QPC staged)\n";
+    std::cout << "model=" << result.providerModel << "\n";
+    std::cout << "resolution=" << options.resolution
+              << " runs=" << options.runs
+              << " warmup=" << options.warmupRuns
+              << "\n\n";
+
+    const char* stages[] = { "acquire", "preprocess", "inference", "postprocess", "send_input", "total" };
+    double E2ESample::* fields[] = {
+        &E2ESample::acquireMs, &E2ESample::preprocessMs, &E2ESample::inferenceMs,
+        &E2ESample::postprocessMs, &E2ESample::sendInputMs, &E2ESample::totalMs
+    };
+    std::cout << std::fixed << std::setprecision(3)
+              << "stage,p50_ms,p95_ms,p99_ms\n";
+    for (size_t i = 0; i < 6; ++i)
+    {
+        std::cout << stages[i] << ","
+                  << StagePercentile(result.samples, fields[i], 0.50) << ","
+                  << StagePercentile(result.samples, fields[i], 0.95) << ","
+                  << StagePercentile(result.samples, fields[i], 0.99) << "\n";
+    }
+    const double totalP50 = StagePercentile(result.samples, &E2ESample::totalMs, 0.50);
+    std::cout << "last_detections=" << result.lastDetections
+              << " fps_p50=" << (totalP50 > 0.0 ? 1000.0 / totalP50 : 0.0) << "\n";
+    if (result.status != "ok")
+        std::cout << "status=" << result.status << " error=" << result.error << "\n";
+}
+
+bool AppendE2ECsv(const CliOptions& options, const E2EResult& result, std::filesystem::path* writtenPath)
+{
+    std::filesystem::path csvPath = options.e2eResultsPath.empty()
+        ? std::filesystem::path("benchmark_results/provider_benchmark_e2e.csv")
+        : std::filesystem::path(options.e2eResultsPath);
+    const std::filesystem::path repoRoot = FindRepoRoot();
+    if (csvPath.is_relative() && !repoRoot.empty())
+        csvPath = repoRoot / csvPath;
+
+    std::error_code ec;
+    const std::filesystem::path parent = csvPath.parent_path();
+    if (!parent.empty())
+        std::filesystem::create_directories(parent, ec);
+    if (ec)
+        return false;
+
+    const std::string header =
+        "timestamp_local,commit_id,git_dirty,build_backend,provider,provider_model,status,"
+        "runs,warmup,input_w,input_h,load_s,warmup_s,"
+        "acquire_p50_ms,acquire_p95_ms,acquire_p99_ms,"
+        "preprocess_p50_ms,preprocess_p95_ms,preprocess_p99_ms,"
+        "inference_p50_ms,inference_p95_ms,inference_p99_ms,"
+        "postprocess_p50_ms,postprocess_p95_ms,postprocess_p99_ms,"
+        "send_input_p50_ms,send_input_p95_ms,send_input_p99_ms,"
+        "total_p50_ms,total_p95_ms,total_p99_ms,fps_p50,last_detections,error";
+
+    bool writeHeader = true;
+    if (std::filesystem::exists(csvPath, ec) && !ec && std::filesystem::file_size(csvPath, ec) > 0)
+    {
+        std::ifstream existing(csvPath);
+        std::string firstLine;
+        std::getline(existing, firstLine);
+        if (!firstLine.empty() && firstLine.back() == '\r')
+            firstLine.pop_back();
+        writeHeader = firstLine != header;
+    }
+
+    std::ofstream file(csvPath, std::ios::app);
+    if (!file)
+        return false;
+
+    if (writeHeader)
+        file << header << "\n";
+
+    const double totalP50 = StagePercentile(result.samples, &E2ESample::totalMs, 0.50);
+    const double fpsP50 = totalP50 > 0.0 ? 1000.0 / totalP50 : 0.0;
+
+    file << std::fixed << std::setprecision(6)
+         << CsvEscape(CurrentTimestampLocal()) << ","
+         << CsvEscape(GetGitCommitId(repoRoot)) << ","
+         << (GetGitDirty(repoRoot) ? "true" : "false") << ","
+         << "cuda,"
+         << "cuda,"
+         << CsvEscape(result.providerModel) << ","
+         << result.status << ","
+         << result.runs << ","
+         << result.warmupRuns << ","
+         << result.inputW << ","
+         << result.inputH << ","
+         << result.loadSeconds << ","
+         << result.warmupSeconds << ",";
+    file << std::fixed << std::setprecision(3)
+         << StagePercentile(result.samples, &E2ESample::acquireMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::acquireMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::acquireMs, 0.99) << ","
+         << StagePercentile(result.samples, &E2ESample::preprocessMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::preprocessMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::preprocessMs, 0.99) << ","
+         << StagePercentile(result.samples, &E2ESample::inferenceMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::inferenceMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::inferenceMs, 0.99) << ","
+         << StagePercentile(result.samples, &E2ESample::postprocessMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::postprocessMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::postprocessMs, 0.99) << ","
+         << StagePercentile(result.samples, &E2ESample::sendInputMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::sendInputMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::sendInputMs, 0.99) << ","
+         << StagePercentile(result.samples, &E2ESample::totalMs, 0.50) << ","
+         << StagePercentile(result.samples, &E2ESample::totalMs, 0.95) << ","
+         << StagePercentile(result.samples, &E2ESample::totalMs, 0.99) << ","
+         << fpsP50 << ","
+         << result.lastDetections << ","
+         << CsvEscape(result.error)
+         << "\n";
+
+    if (writtenPath)
+        *writtenPath = csvPath;
+    return true;
+}
+
 void PrintSummary(const CliOptions& options, const BenchmarkResult& result)
 {
     std::cout << "\nCUDA benchmark summary (seconds)\n";
@@ -557,6 +836,8 @@ bool IsProviderBenchmarkRequested(int argc, char** argv)
             StartsWith(arg, "--bench-providers=") ||
             arg == "--benchmark-help" ||
             arg == "--bench-help" ||
+            arg == "--bench-e2e" ||
+            arg == "--e2e" ||
             arg == "--bench-list-devices")
         {
             return true;
@@ -617,6 +898,23 @@ int RunProviderBenchmarkCli(int argc, char** argv)
             std::cout << "results_csv=" << csvPath.string() << "\n";
             std::cout << "results_csv_base=repo_root\n";
         }
+    }
+
+    if (options.e2e)
+    {
+        E2EResult e2e = RunCudaE2EBenchmark(options, modelPath, frame);
+        PrintE2ESummary(options, e2e);
+        if (options.saveResults)
+        {
+            std::filesystem::path e2eCsv;
+            if (AppendE2ECsv(options, e2e, &e2eCsv))
+            {
+                std::cout << "e2e_csv=" << e2eCsv.string() << "\n";
+                std::cout << "e2e_csv_base=repo_root\n";
+            }
+        }
+        if (e2e.status != "ok")
+            return 3;
     }
 
     return result.status == "ok" ? 0 : 3;
