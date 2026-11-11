@@ -317,6 +317,15 @@ std::vector<Detection> DecodeYoloOutput(
     float scale,
     std::chrono::duration<double, std::milli>* nmsTime)
 {
+    // Two accepted layouts, same CPU NMS:
+    //  1) Raw YOLO: [1,C,N] or [1,N,C] with C = 4+classes (+1 objectness).
+    //     Confidence is objectness*maxClassScore -> per-class thresholding.
+    //  2) EfficientNMS_TRT hook (optional export nms=True): [1,N,6] xyxy+conf
+    //     +class, already NMSed on-GPU. Decoded directly below; pass
+    //     nms_threshold=1 on the Inference node to skip the CPU NMS pass.
+    // Letterbox note: `scale` maps net pixels -> caller space. The TRT caller
+    // now decodes with scale=1 (net pixels) and applies the exact letterbox
+    // inverse ((x-pad)/scale) itself, so aspect is preserved.
     std::vector<Detection> detections;
     if (!output)
         return detections;
