@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
+#include "fs_utf8.h"
 #include <optional>
 #include <deque>
 #include <random>
@@ -105,7 +106,7 @@ static void SetWorkingDirectoryToExecutable()
         std::filesystem::current_path(exeDir, ec);
         if (ec && config.verbose)
         {
-            std::cout << "[Config] Failed to set working dir: " << exeDir.u8string()
+            std::cout << "[Config] Failed to set working dir: " << aimbot::fsUtf8(exeDir)
                       << " (" << ec.message() << ")" << std::endl;
         }
     }

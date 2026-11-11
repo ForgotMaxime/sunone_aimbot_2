@@ -111,10 +111,10 @@ void testEditableInputDefaultsOwnMouseAndUndo()
     }
     gestureScenario="Typed local defaults and named options";
     EditorHarness h;h.graph().nodes={defaultNode(NodeKind::ConcatString,1,32,32)};edited();h.frame();
-    replaceInlineText(h,defaultField(h,1,1),u8"folder/пример");
-    require(findNode(h.graph(),1)->inputTexts.at(1)==u8"folder/пример","String input lost text while editing");
+    replaceInlineText(h,defaultField(h,1,1),"folder/пример");
+    require(findNode(h.graph(),1)->inputTexts.at(1)=="folder/пример","String input lost text while editing");
     std::string text,error;selectOne(0,1);require(selectionText(h.graph(),0,text,error)&&pasteSelectionText(h.graph(),0,text,ImVec2(416,32),error),error.c_str());
-    require(findNode(h.graph(),editor.selected[0])->inputTexts.at(1)==u8"folder/пример","Clipboard lost local input defaults");
+    require(findNode(h.graph(),editor.selected[0])->inputTexts.at(1)=="folder/пример","Clipboard lost local input defaults");
     h.graph().nodes={defaultNode(NodeKind::IntegerAdd,1,32,32)};h.graph().links.clear();edited();h.frame();
     replaceInlineText(h,defaultField(h,1,0),"2147483647",true);
     require(findNode(h.graph(),1)->inputValues.at(0)==MaxInteger,"Int default field lost precision");
@@ -209,7 +209,7 @@ void testInputValuesUseAvailableWidthAndKeepMouseOwnership()
         const auto textBounds=inputValueRect(h.graph(),textNode,1,h.origin,font,textDesired);
         const auto& full=fitInputDefault(textDisplay,textNode,1,0,ImGui::GetFont(),font,textBounds.GetWidth()-6*zoom);
         require(full.shown==text.inputTexts[1],"A text value was cut at a fixed character count despite having room");
-        findNode(h.graph(),1)->width=160;findNode(h.graph(),1)->inputTexts[1]=u8"Путь/модель/пример/long-file-name.onnx";edited();h.frame();
+        findNode(h.graph(),1)->width=160;findNode(h.graph(),1)->inputTexts[1]="Путь/модель/пример/long-file-name.onnx";edited();h.frame();
         const auto& narrowNode=*findNode(h.graph(),1);auto& narrowDisplay=editor.canvasRoutes[0].displays[0];
         const auto narrowBounds=inputValueRect(h.graph(),narrowNode,1,h.origin,font,inputValueWidth(narrowDisplay,narrowNode,1,0,ImGui::GetFont(),font,zoom));
         const auto& cropped=fitInputDefault(narrowDisplay,narrowNode,1,0,ImGui::GetFont(),font,std::max(0.0f,narrowBounds.GetWidth()-6*zoom));
@@ -259,15 +259,15 @@ void testModelListsApplyUndoAndRefreshAcrossZoom()
         require(modelMenu.choices.size()==(kind==NodeKind::DepthInference?5:4),"The model list lost supported files or included a directory/unsupported extension");
         const auto scans=modelMenu.scans;for(int i=0;i<8;++i)h.frame();
         require(modelMenu.scans==scans,"The open model menu scans the directory every frame");
-        const auto found=std::find_if(modelMenu.choices.begin(),modelMenu.choices.end(),[](const ModelChoice& item){return item.name==u8"глубина.onnx";});
+        const auto found=std::find_if(modelMenu.choices.begin(),modelMenu.choices.end(),[](const ModelChoice& item){return item.name=="глубина.onnx";});
         require(found!=modelMenu.choices.end(),"Unicode model names are missing from the list");
         const int index=static_cast<int>(found-modelMenu.choices.begin());const auto* list=modelListWindow();
         h.click(ImVec2(list->WorkRect.Min.x+40,list->DC.CursorStartPos.y+(index+0.5f)*modelMenu.rowHeight));requireNoFieldGesture();
-        require(textParameter(*findNode(h.graph(),1),"model_path")==u8"models/глубина.onnx"&&textParameter(service().workspace().graphs[3].nodes[0],"model_path")==u8"models/глубина.onnx",
+        require(textParameter(*findNode(h.graph(),1),"model_path")=="models/глубина.onnx"&&textParameter(service().workspace().graphs[3].nodes[0],"model_path")=="models/глубина.onnx",
             "Selecting a model did not immediately update its graph input");
         require(editor.undo.size()==1,"Selecting a model created more than one undo step");
         std::string encoded,error;Workspace loaded;
-        require(serialize(editor.draft,encoded,error)&&deserialize(encoded,loaded,error)&&textParameter(loaded.graphs[3].nodes[0],"model_path")==u8"models/глубина.onnx","The selected relative model path did not export/import");
+        require(serialize(editor.draft,encoded,error)&&deserialize(encoded,loaded,error)&&textParameter(loaded.graphs[3].nodes[0],"model_path")=="models/глубина.onnx","The selected relative model path did not export/import");
         history(false);h.frame();require(textParameter(*findNode(h.graph(),1),"model_path").empty(),"Undo did not restore the previous model");
         {std::ofstream file("models/new.onnx");file<<"model fixture";}
         h.click(optionField(h,1,"model_path"));h.frame();h.frame();

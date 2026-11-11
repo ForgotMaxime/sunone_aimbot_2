@@ -1,4 +1,5 @@
 #include "nodes/node_config_bridge.h"
+#include "fs_utf8.h"
 #include "config.h"
 #include "keyboard/keycodes.h"
 #include <algorithm>
@@ -72,7 +73,7 @@ bool initializeMissingModels(Workspace& workspace,const std::string& preferredMo
     };
     std::string candidate;bool searched=false,changed=false;
     const auto supported=[&](const fs::path& path){
-        auto extension=path.extension().u8string();
+        auto extension=aimbot::fsUtf8(path.extension());
         std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
         return extension==".onnx"||(nativeBackend=="TRT"&&extension==".engine");
     };
@@ -92,7 +93,7 @@ bool initializeMissingModels(Workspace& workspace,const std::string& preferredMo
             for(fs::directory_iterator it("models",error),end;!error&&it!=end;it.increment(error))
                 if(supported(it->path())&&regular(it->path()))
                 {
-                    const auto name=it->path().filename().u8string();if(name.size()>1024)continue;
+                    const auto name=aimbot::fsUtf8(it->path().filename());if(name.size()>1024)continue;
                     only=name;if(++count>1)return;
                 }
             if(!error&&count==1)candidate=std::move(only);

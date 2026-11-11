@@ -35,7 +35,7 @@ void OverlayConfig_NotifySaved(const char* filename)
 {
     cfgSavedAt = ImGui::GetTime();
     const char* name = filename ? filename : "config.ini";
-    std::strncpy(cfgSavedName, name, sizeof(cfgSavedName) - 1);
+    ::strncpy_s(cfgSavedName, name, sizeof(cfgSavedName) - 1);
     cfgSavedName[sizeof(cfgSavedName) - 1] = '\0';
 }
 

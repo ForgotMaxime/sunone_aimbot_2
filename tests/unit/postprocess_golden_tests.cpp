@@ -4,8 +4,6 @@
 // - postProcessYoloDML() decoders are pinned on fixed xyxy / feature-major inputs.
 #include "detector/postProcess.h"
 
-#include <opencv2/dnn.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -57,30 +55,48 @@ bool sameDetections(std::vector<Detection> a, std::vector<Detection> b)
     return true;
 }
 
-// Reference: OpenCV per-class NMS over the same inputs.
+// Reference: self-contained naive per-class greedy NMS. Deliberately not
+// cv::dnn::NMSBoxes so the golden test stays hermetic and does not depend on
+// quirks of any particular OpenCV build.
+float boxIou(const Detection& a, const Detection& b)
+{
+    const int x1 = std::max(a.box.x, b.box.x);
+    const int y1 = std::max(a.box.y, b.box.y);
+    const int x2 = std::min(a.box.x + a.box.width, b.box.x + b.box.width);
+    const int y2 = std::min(a.box.y + a.box.height, b.box.y + b.box.height);
+    const int w = x2 - x1;
+    const int h = y2 - y1;
+    if (w <= 0 || h <= 0)
+        return 0.0f;
+    const float inter = static_cast<float>(w) * static_cast<float>(h);
+    const float areaA = static_cast<float>(a.box.width) * static_cast<float>(a.box.height);
+    const float areaB = static_cast<float>(b.box.width) * static_cast<float>(b.box.height);
+    const float uni = areaA + areaB - inter;
+    return uni > 0.0f ? inter / uni : 0.0f;
+}
+
 std::vector<Detection> referencePerClassNms(const std::vector<Detection>& input, float nmsThreshold)
 {
-    std::vector<Detection> kept;
-    std::vector<int> classes;
-    for (const auto& det : input)
-        if (std::find(classes.begin(), classes.end(), det.classId) == classes.end())
-            classes.push_back(det.classId);
-    for (int klass : classes)
+    std::vector<Detection> sorted = input;
+    std::stable_sort(sorted.begin(), sorted.end(), [](const Detection& a, const Detection& b)
     {
-        std::vector<cv::Rect> boxes;
-        std::vector<float> scores;
-        std::vector<Detection> members;
-        for (const auto& det : input)
-            if (det.classId == klass)
-            {
-                boxes.push_back(det.box);
-                scores.push_back(det.confidence);
-                members.push_back(det);
-            }
-        std::vector<int> indices;
-        cv::dnn::NMSBoxes(boxes, scores, 0.0f, nmsThreshold, indices);
-        for (int index : indices)
-            kept.push_back(members[static_cast<size_t>(index)]);
+        return a.confidence > b.confidence;
+    });
+    std::vector<Detection> kept;
+    kept.reserve(sorted.size());
+    std::vector<char> suppressed(sorted.size(), 0);
+    for (size_t i = 0; i < sorted.size(); ++i)
+    {
+        if (suppressed[i])
+            continue;
+        kept.push_back(sorted[i]);
+        for (size_t j = i + 1; j < sorted.size(); ++j)
+        {
+            if (suppressed[j] || sorted[j].classId != sorted[i].classId)
+                continue;
+            if (boxIou(sorted[i], sorted[j]) > nmsThreshold)
+                suppressed[j] = 1;
+        }
     }
     return kept;
 }
@@ -155,23 +171,25 @@ void testXyxyDecoderGolden()
 
 void testFeatureMajorDecoderGolden()
 {
-    // [1, 4+numClasses, cols] without objectness, 2 classes, 3 predictions.
-    // Prediction 1 and 2 overlap heavily (same class 0); prediction 3 is class 1.
+    // [1, 4+numClasses, cols] without objectness, 2 classes. cols > rows so
+    // the layout is unambiguously feature-major (production N is in the
+    // thousands). Prediction 1 and 2 overlap heavily (same class 0);
+    // prediction 3 is class 1; the rest are below the confidence threshold.
     const float output[] = {
         // cx
-        50.0f, 52.0f, 200.0f,
+        50.0f, 52.0f, 200.0f, 10.0f, 10.0f, 10.0f, 10.0f,
         // cy
-        50.0f, 52.0f, 200.0f,
+        50.0f, 52.0f, 200.0f, 10.0f, 10.0f, 10.0f, 10.0f,
         // w
-        40.0f, 40.0f, 30.0f,
+        40.0f, 40.0f, 30.0f, 5.0f, 5.0f, 5.0f, 5.0f,
         // h
-        40.0f, 40.0f, 30.0f,
+        40.0f, 40.0f, 30.0f, 5.0f, 5.0f, 5.0f, 5.0f,
         // class 0 scores
-        0.9f, 0.8f, 0.1f,
+        0.9f, 0.8f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f,
         // class 1 scores
-        0.05f, 0.05f, 0.85f,
+        0.05f, 0.05f, 0.85f, 0.1f, 0.1f, 0.1f, 0.1f,
     };
-    const std::vector<int64_t> shape = {1, 6, 3};
+    const std::vector<int64_t> shape = {1, 6, 7};
     const std::vector<Detection> detections =
         postProcessYoloDML(output, shape, 2, 0.5f, 0.45f, 100, nullptr);
     require(detections.size() == 2, "feature-major golden must keep 2 boxes");

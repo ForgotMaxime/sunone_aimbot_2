@@ -1,8 +1,15 @@
 #pragma once
 #include "overlay/drawing_renderer.h"
+#include <string>
 
 namespace
 {
+// C++20: u8"..." is char8_t based; byte-copy back to std::string to keep the
+// historical UTF-8 narrow-string test expectations.
+inline std::string testUtf8(const char8_t* s)
+{
+    return std::string(reinterpret_cast<const char*>(s));
+}
 void testPredictionDrawingExampleAndRetainedMotion()
 {
     auto workspace=emptyWorkspace();workspace.graphs[0]=predictionDrawingExample();
@@ -51,7 +58,7 @@ Workspace drawingWorkspace()
     node(graph,1).inputValues={{0,10},{1,20}};node(graph,2).inputValues={{0,30},{1,-10}};
     node(graph,3).parameters["seconds"]=0.5;node(graph,3).parameters["samples"]=3;node(graph,6).parameters["seconds"]=0.5;
     node(graph,4).parameters["draw_r"]=230;node(graph,4).parameters["draw_g"]=100;node(graph,4).parameters["draw_b"]=40;node(graph,4).parameters["draw_width"]=2;
-    node(graph,10).textParameters["text"]=u8"Прогноз";node(graph,11).parameters["game_overlay_max_fps"]=240;
+    node(graph,10).textParameters["text"]=testUtf8(u8"Прогноз");node(graph,11).parameters["game_overlay_max_fps"]=240;
     graph.links={{1,0,3,0},{2,0,3,1},{3,0,5,1},{4,0,5,2},{1,0,6,0},{2,0,6,1},{5,0,7,0},{6,0,7,1},{4,0,7,2},
         {7,0,8,0},{1,0,8,1},{6,0,8,2},{4,0,8,3},{8,0,9,0},{1,0,9,1},{2,0,9,2},{4,0,9,3},
         {9,0,10,0},{6,0,10,1},{4,0,10,3},{10,0,11,1}};
@@ -64,7 +71,7 @@ void testDrawingPredictionGeometryCachingAndGates()
     publish(service,workspace);auto actions=service.evaluate(context);
     require(renders==1&&actions.activeRenderKeys==std::vector<int>{11}&&drawing&&drawing->commands.size()==5,"Drawing primitives did not compose into one control-workflow output");
     const auto& path=drawing->commands[0];require(path.points&&path.points->size()==3&&(*path.points)[0].x==10&&(*path.points)[1].x==17.5&&(*path.points)[2].x==25&&(*path.points)[2].y==15,"Predicted samples do not follow position + velocity * time");
-    require(drawing->commands[1].from.x==25&&drawing->commands[1].from.y==15&&drawing->commands[4].text&&*drawing->commands[4].text==u8"Прогноз","Computed point or UTF-8 text did not reach the drawing commands");
+    require(drawing->commands[1].from.x==25&&drawing->commands[1].from.y==15&&drawing->commands[4].text&&*drawing->commands[4].text==testUtf8(u8"Прогноз"),"Computed point or UTF-8 text did not reach the drawing commands");
     const auto first=drawing;service.evaluate(context);require(renders==1,"Drawing ignored its output FPS limit");
     std::this_thread::sleep_for(std::chrono::milliseconds(6));service.evaluate(context);
     require(renders==2&&drawing==first,"Unchanged drawing geometry was rebuilt rather than reused");

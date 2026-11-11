@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <string>
 
+#include "fs_utf8.h"
+
 namespace depth_anything
 {
 inline bool resolveModelPath(const std::string& value,std::string& result,std::string& error)
@@ -23,7 +25,7 @@ inline bool resolveModelPath(const std::string& value,std::string& result,std::s
         if(!regular(selected)){error="Depth model file not found: "+value;return false;}
         std::error_code ec;const auto absolute=fs::absolute(selected,ec);
         if(ec){error="Cannot resolve depth model: "+value;return false;}
-        result=absolute.lexically_normal().u8string();return true;
+        result=aimbot::fsUtf8(absolute.lexically_normal());return true;
     }
     catch(const std::exception&){error="Invalid depth model path: "+value;return false;}
 }

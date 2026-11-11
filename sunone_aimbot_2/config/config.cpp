@@ -200,9 +200,9 @@ bool Config::loadConfig(const std::string& filename)
 #endif
 
 #ifdef USE_CUDA
-        ai_model = "sunxds_0.5.6.engine";
+        ai_model = "fortnite11n.onnx";
 #else
-        ai_model = "sunxds_0.5.6.onnx";
+        ai_model = "fortnite11n.onnx";
 #endif
 
         confidence_threshold = 0.10f;
@@ -568,9 +568,9 @@ bool Config::loadConfig(const std::string& filename)
 #endif
 
 #ifdef USE_CUDA
-    ai_model = get_string("ai_model", "sunxds_0.8.0.engine");
+    ai_model = get_string("ai_model", "fortnite11n.onnx");
 #else
-    ai_model = get_string("ai_model", "sunxds_0.8.0.onnx");
+    ai_model = get_string("ai_model", "fortnite11n.onnx");
 #endif
     confidence_threshold = (float)get_double("confidence_threshold", 0.15);
     nms_threshold = (float)get_double("nms_threshold", 0.50);

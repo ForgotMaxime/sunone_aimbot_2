@@ -15,6 +15,7 @@
 #include "nodes/node_config_bridge.h"
 #include "nodes/vision_runtime.h"
 #include "scr/data_collector.h"
+#include "fs_utf8.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "config.h"
@@ -2142,7 +2143,7 @@ const InputDefaultDisplay& inputDefault(NodeDisplay& display,const Node& node,st
         if(modelPathInput(node.kind,input.defaultParameter))
         {
             if(source.empty())cached.text="Select model...";
-            else try{const auto name=std::filesystem::u8path(source).filename().u8string();if(!name.empty())cached.text=name;}catch(const std::exception&){}
+            else try{const auto name=aimbot::fsUtf8(std::filesystem::u8path(source).filename());if(!name.empty())cached.text=name;}catch(const std::exception&){}
         }
         else if(cached.text.empty())cached.text="\"\"";
         break;
@@ -3172,9 +3173,9 @@ void refreshModelChoices(bool depth,bool engines)
             for(fs::directory_iterator it(folder,error),end;!error&&it!=end;it.increment(error))
             {
                 std::error_code status;if(!it->is_regular_file(status))continue;
-                const auto extension=lowerModelKey(it->path().extension().u8string());
+                const auto extension=lowerModelKey(aimbot::fsUtf8(it->path().extension()));
                 if(extension!=".onnx"&&!(engines&&extension==".engine")&&!(depth&&(extension==".trt"||extension==".plan")))continue;
-                const auto name=it->path().filename().u8string(),path=(fs::path(folder)/it->path().filename()).generic_u8string();
+                const auto name=aimbot::fsUtf8(it->path().filename()),path=aimbot::fsUtf8Generic(fs::path(folder)/it->path().filename());
                 if(path.size()>1024)continue;
                 const bool legacy=std::strcmp(folder,"depth_models")==0;
                 modelMenu.choices.push_back({name,legacy?path:name,path,legacy});
@@ -3201,7 +3202,7 @@ std::string modelChoiceKey(const Node& node,const std::string& value)
             std::error_code error;const auto current=fs::current_path(error);
             if(!error){const auto relative=path.lexically_normal().lexically_relative(current);if(!relative.empty())path=relative;}
         }
-        return lowerModelKey(path.lexically_normal().generic_u8string());
+        return lowerModelKey(aimbot::fsUtf8Generic(path.lexically_normal()));
     }
     catch(const std::exception&){return value;}
 }
@@ -3209,7 +3210,7 @@ bool modelChoiceControl(const Node& node,std::string& value,int graph,int pin,In
 {
     const bool depth=node.kind==NodeKind::DepthInference;
     std::string preview="Select model...";
-    if(!value.empty())try{preview=std::filesystem::u8path(value).filename().u8string();if(preview.empty())preview=value;}catch(const std::exception&){preview=value;}
+    if(!value.empty())try{preview=aimbot::fsUtf8(std::filesystem::u8path(value).filename());if(preview.empty())preview=value;}catch(const std::exception&){preview=value;}
     ImGui::SetNextWindowSizeConstraints(ImVec2(std::max(width,280*scale),0),ImVec2(std::max(width,600*scale),std::numeric_limits<float>::max()));
     if(!ImGui::BeginCombo("##value",preview.c_str()))return false;
     auto owned=ImGui::GetCurrentContext()->LastItemData;ownInputPopup(node.id,pin);
@@ -5128,7 +5129,7 @@ void NodeEditor_RunFileActions()
         if(!node){editor.message="The selected node no longer exists.";editor.error=true;return;}
         const auto& specs=definition(node->kind).textParameters;
         const auto spec=std::find_if(specs.begin(),specs.end(),[&](const TextParameterSpec& item){return item.key==editor.fileParameter;});
-        const auto text=path.u8string();
+        const auto text=aimbot::fsUtf8(path);
         if(spec==specs.end()||text.size()>spec->maxLength){editor.message="This file path is too long for the node.";editor.error=true;return;}
         remember();node->textParameters[editor.fileParameter]=text;edited();return;
     }

@@ -52,11 +52,11 @@ void testOutputMigrationKeepsSettingsWiresAndState()
 {
     auto workspace=emptyWorkspace();auto& graph=workspace.graphs[3];
     graph.nodes={defaultNode(NodeKind::CaptureSource,1),defaultNode(NodeKind::RenderOverlay,2),defaultNode(NodeKind::CollectDataset,3),
-        defaultNode(NodeKind::Integer,4),stringNode(5,u8"icons/пример.png"),defaultNode(NodeKind::Float,6),defaultNode(NodeKind::Boolean,7)};
+        defaultNode(NodeKind::Integer,4),stringNode(5,"icons/пример.png"),defaultNode(NodeKind::Float,6),defaultNode(NodeKind::Boolean,7)};
     node(graph,2).parameters["enabled"]=1;node(graph,2).parameters["game_overlay_box_g"]=47;
     node(graph,2).parameters["game_overlay_icon_enabled"]=1;node(graph,2).parameters["snap_boost"]=1.8;
     node(graph,3).parameters["enabled"]=1;node(graph,3).parameters["auto_label_data"]=1;
-    node(graph,3).textParameters["collect_output_dir"]=u8"dataset/пример";node(graph,3).textParameters["auto_label_record_classes"]="1,3";
+    node(graph,3).textParameters["collect_output_dir"]="dataset/пример";node(graph,3).textParameters["auto_label_record_classes"]="1,3";
     node(graph,4).value=173;node(graph,6).value=0.42;
     graph.links={{1,0,2,1},{1,0,3,1},{4,0,2,optionPin(NodeKind::RenderOverlay,"game_overlay_box_r")},
         {5,0,2,optionPin(NodeKind::RenderOverlay,"game_overlay_icon_path")},{6,0,3,optionPin(NodeKind::CollectDataset,"auto_label_min_conf")},

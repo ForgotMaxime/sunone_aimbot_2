@@ -13,6 +13,7 @@
 #include "detection_buffer.h"
 #include "config.h"
 #include "motion_tracker.h"
+#include "fs_utf8.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -90,8 +91,8 @@ std::string resolveModelPath(const NodeGraph::Node& node)
 {
     const auto model=std::filesystem::u8path(text(node,"model_path"));
     if(model.empty())return {};
-    if(model.is_absolute()||std::filesystem::exists(model))return model.u8string();
-    return (std::filesystem::path("models")/model).u8string();
+    if(model.is_absolute()||std::filesystem::exists(model))return aimbot::fsUtf8(model);
+    return aimbot::fsUtf8(std::filesystem::path("models")/model);
 }
 void reportError(int nodeKey,const std::string& error){errors[nodeKey]=error;}
 std::string nodeError(int nodeKey){const auto found=errors.find(nodeKey);return found==errors.end()?std::string{}:found->second;}
