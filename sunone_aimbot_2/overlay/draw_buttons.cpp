@@ -7,12 +7,14 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cstdio>
 
 #include "imgui/imgui.h"
 #include "sunone_aimbot_2.h"
 #include "overlay.h"
 #include "overlay/config_dirty.h"
 #include "overlay/ui_sections.h"
+#include "overlay/preset_store.h"
 #include "keycodes.h"
 
 namespace
@@ -265,6 +267,106 @@ void draw_buttons()
             OverlayConfig_MarkDirty();
         OverlayUI::EndSettingRow(row);
         drawBindingConflicts();
+        OverlayUI::EndSection();
+    }
+
+    if (OverlayUI::BeginSection("Game presets", "buttons_section_presets"))
+    {
+        static PresetStore store;
+        static bool storeReady = false;
+        static char newPresetName[65] = "";
+        if (!storeReady)
+        {
+            storeReady = true;
+            store.ensureLoaded(config.game_profiles);
+            std::snprintf(newPresetName, sizeof(newPresetName), "%s", config.active_game.c_str());
+        }
+
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Presets are stored in presets/*.json (migrated from [Games]). Applying sets the active game and saves config.ini.");
+        ImGui::PopTextWrapPos();
+
+        const auto activeIt = config.game_profiles.find(config.active_game);
+        if (activeIt != config.game_profiles.end())
+        {
+            const auto& gp = activeIt->second;
+            ImGui::Text("Active: %s (sens %.3g, yaw %.5g, pitch %.5g%s)",
+                gp.name.c_str(), gp.sens, gp.yaw, gp.pitch,
+                gp.fovScaled ? ", fov-scaled" : "");
+        }
+        else
+        {
+            ImGui::TextDisabled("Active: %s (no matching profile)", config.active_game.c_str());
+        }
+
+        if (ImGui::Button("Refresh presets"))
+            store.refresh();
+        if (!store.lastError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", store.lastError.c_str());
+
+        for (const auto& preset : store.presets)
+        {
+            ImGui::PushID(preset.name.c_str());
+            const bool isActive = (preset.name == config.active_game);
+            if (isActive)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 1.0f, 0.6f, 1.0f));
+            ImGui::BulletText("%s  (sens %.3g, yaw %.5g%s)",
+                preset.name.c_str(), preset.sens, preset.yaw,
+                preset.fovScaled ? ", fov-scaled" : "");
+            if (isActive)
+                ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Apply"))
+            {
+                config.active_game = preset.name;
+                Config::GameProfile gp;
+                gp.name = preset.name;
+                gp.sens = preset.sens;
+                gp.yaw = preset.yaw;
+                gp.pitch = preset.pitch;
+                gp.fovScaled = preset.fovScaled;
+                gp.baseFOV = preset.baseFOV;
+                config.game_profiles[preset.name] = gp;
+                OverlayConfig_MarkDirty();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Delete"))
+            {
+                if (store.removePreset(preset.name))
+                    OverlayConfig_MarkDirty();
+            }
+            ImGui::PopID();
+        }
+        if (store.presets.empty())
+            ImGui::TextDisabled("No presets yet.");
+
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##preset_name", "Preset name (Enter = save current game)", newPresetName, sizeof(newPresetName));
+        if (ImGui::Button("Save current game as preset"))
+        {
+            std::string name = newPresetName;
+            if (name.empty())
+                name = config.active_game;
+            GamePreset preset;
+            preset.name = name;
+            const auto it = config.game_profiles.find(config.active_game);
+            if (it != config.game_profiles.end())
+            {
+                preset.sens = it->second.sens;
+                preset.yaw = it->second.yaw;
+                preset.pitch = it->second.pitch;
+                preset.fovScaled = it->second.fovScaled;
+                preset.baseFOV = it->second.baseFOV;
+            }
+            if (store.savePreset(preset))
+            {
+                config.game_profiles[name] = Config::GameProfile{ name, preset.sens, preset.yaw,
+                    preset.pitch, preset.fovScaled, preset.baseFOV };
+                OverlayConfig_MarkDirty();
+            }
+        }
+        if (!store.lastError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "%s", store.lastError.c_str());
         OverlayUI::EndSection();
     }
 }
