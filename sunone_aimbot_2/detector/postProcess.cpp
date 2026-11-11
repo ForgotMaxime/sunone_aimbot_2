@@ -4,6 +4,16 @@
 #include <limits>
 #include <cmath>
 
+#if defined(AIMBOT_HAVE_AVX2)
+#include <immintrin.h>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+#endif
+
 #include "postProcess.h"
 
 namespace
@@ -448,40 +458,97 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold, std::chrono::du
         return;
     }
 
-    std::vector<bool> suppress(detections.size(), false);
-    std::vector<Detection> result;
-    result.reserve(detections.size());
-
-    for (size_t i = 0; i < detections.size(); ++i)
+    // Per-class NMS on SoA coordinates. Decoders emit boxes directly, so no
+    // model-output transpose/extra copy happens here; suppression groups by
+    // classId to keep cross-class overlaps (e.g. head vs body) intact.
+    const size_t count = detections.size();
+    std::vector<float> x1(count), y1(count), x2(count), y2(count), area(count);
+    for (size_t i = 0; i < count; ++i)
     {
-        if (suppress[i]) continue;
+        const cv::Rect& box = detections[i].box;
+        x1[i] = static_cast<float>(box.x);
+        y1[i] = static_cast<float>(box.y);
+        x2[i] = static_cast<float>(box.x + box.width);
+        y2[i] = static_cast<float>(box.y + box.height);
+    }
 
-        result.push_back(detections[i]);
-
-        const cv::Rect& box_i = detections[i].box;
-        const float area_i = static_cast<float>(box_i.area());
-
-        for (size_t j = i + 1; j < detections.size(); ++j)
+#if defined(AIMBOT_HAVE_AVX2)
+    const bool useAvx2 =
+#if defined(_WIN32)
+        IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE) != FALSE;
+#else
+        true;
+#endif
+    if (useAvx2)
+    {
+        size_t i = 0;
+        for (; i + 4 <= count; i += 4)
         {
-            if (suppress[j]) continue;
+            const __m256 w = _mm256_sub_ps(_mm256_loadu_ps(&x2[i]), _mm256_loadu_ps(&x1[i]));
+            const __m256 h = _mm256_sub_ps(_mm256_loadu_ps(&y2[i]), _mm256_loadu_ps(&y1[i]));
+            _mm256_storeu_ps(&area[i], _mm256_mul_ps(w, h));
+        }
+        for (; i < count; ++i)
+            area[i] = (x2[i] - x1[i]) * (y2[i] - y1[i]);
+    }
+    else
+#endif
+    {
+        for (size_t i = 0; i < count; ++i)
+            area[i] = (x2[i] - x1[i]) * (y2[i] - y1[i]);
+    }
 
-            const cv::Rect& box_j = detections[j].box;
-            const cv::Rect intersection = box_i & box_j;
+    // Confidence order is already descending; stable class grouping keeps it
+    // within each class bucket.
+    std::vector<size_t> order(count);
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b)
+    {
+        return detections[a].classId < detections[b].classId;
+    });
 
-            if (intersection.width > 0 && intersection.height > 0)
+    std::vector<char> suppressed(count, 0);
+    std::vector<Detection> result;
+    result.reserve(count);
+
+    size_t segmentBegin = 0;
+    while (segmentBegin < count)
+    {
+        size_t segmentEnd = segmentBegin + 1;
+        const int klass = detections[order[segmentBegin]].classId;
+        while (segmentEnd < count && detections[order[segmentEnd]].classId == klass)
+            ++segmentEnd;
+
+        for (size_t a = segmentBegin; a < segmentEnd; ++a)
+        {
+            const size_t i = order[a];
+            if (suppressed[i]) continue;
+
+            result.push_back(detections[i]);
+
+            for (size_t b = a + 1; b < segmentEnd; ++b)
             {
-                const float intersection_area = static_cast<float>(intersection.area());
-                const float union_area = area_i + static_cast<float>(box_j.area()) - intersection_area;
+                const size_t j = order[b];
+                if (suppressed[j]) continue;
 
-                if (intersection_area / union_area > nmsThreshold)
-                {
-                    suppress[j] = true;
-                }
+                const float interX1 = std::max(x1[i], x1[j]);
+                const float interY1 = std::max(y1[i], y1[j]);
+                const float interX2 = std::min(x2[i], x2[j]);
+                const float interY2 = std::min(y2[i], y2[j]);
+                const float interW = interX2 - interX1;
+                const float interH = interY2 - interY1;
+                if (interW <= 0.0f || interH <= 0.0f) continue;
+
+                const float unionArea = area[i] + area[j] - interW * interH;
+                if (unionArea > 0.0f && (interW * interH) / unionArea > nmsThreshold)
+                    suppressed[j] = 1;
             }
         }
+        segmentBegin = segmentEnd;
     }
 
     detections = std::move(result);
+    SortDetectionsByConfidence(detections);
 
     auto t1 = std::chrono::steady_clock::now();
     if (nmsTime)

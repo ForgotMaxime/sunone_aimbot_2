@@ -13,6 +13,11 @@ struct Detection
     int classId;
 };
 
+// Per-class greedy NMS, in-place, descending confidence on output.
+// Boxes of different classId never suppress each other. A threshold >= 1
+// keeps every box (disabled stage for graph-level NMS); <= 0 clears timing
+// only. Builds with AIMBOT_HAVE_AVX2 vectorize the area pre-pass when the
+// CPU reports AVX2, with scalar fallback otherwise.
 void NMS(
     std::vector<Detection>& detections,
     float nmsThreshold,
